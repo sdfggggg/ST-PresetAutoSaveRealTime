@@ -590,11 +590,12 @@ function renderDropdownNested(panel, select, optionList, currentValue, overrides
     const tree = forceTree || settings.groupingTree || {};
     const maxDepth = settings.nestingMaxDepth || 3;
     const rootNodes = buildNestedGroupTree(allPresetNames, overrides, tree, maxDepth, settings.groupingSeriesAliases || {});
-    // —— 排序根系列（按排序模式）——
+    // —— 排序所有系列（根 + 嵌套子组，按当前排序模式）——
     {
         const mode = settings.takeoverSortMode || 'default';
         const customOrder = settings.takeoverCustomOrder || [];
-        if (mode !== 'default') {
+        // 递归：按排序模式对节点数组（及其 children）进行原地排序
+        const sortNodeArray = (nodes, scopeCustomOrder) => {
             const timeOfNode = (node) => {
                 let t = Infinity;
                 const names = collectAllPresetNames([node]);
@@ -604,12 +605,26 @@ function renderDropdownNested(panel, select, optionList, currentValue, overrides
                 }
                 return t;
             };
-            const sortedRoots = applySortToKeys(rootNodes.map(n => n.key), mode, customOrder, (k) => {
-                const node = rootNodes.find(n => n.key === k);
-                return node ? timeOfNode(node) : Infinity;
-            });
-            rootNodes.sort((a, b) => sortedRoots.indexOf(a.key) - sortedRoots.indexOf(b.key));
-        }
+            // scopeCustomOrder 仅在根级生效（扁平 customOrder 就是根级顺序），
+            // 子级 scopeCustomOrder 传空（回退到 default 字母序）
+            const sortedKeys = applySortToKeys(
+                nodes.map(n => n.key),
+                mode,
+                scopeCustomOrder || [],
+                (k) => {
+                    const node = nodes.find(n => n.key === k);
+                    return node ? timeOfNode(node) : Infinity;
+                }
+            );
+            nodes.sort((a, b) => sortedKeys.indexOf(a.key) - sortedKeys.indexOf(b.key));
+            // 递归排序子组（customOrder 仅用于顶级，子组不传 customOrder，按同一 mode 的规则排）
+            for (const n of nodes) {
+                if (n.children && n.children.length > 0) {
+                    sortNodeArray(n.children, null);
+                }
+            }
+        };
+        sortNodeArray(rootNodes, customOrder);
     }
     //    使用共享函数 getNodePath 获取祖先 key 链，再映射为 displayName 拼接成显示路径
     const keyToDisplay = new Map();
