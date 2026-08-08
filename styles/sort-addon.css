@@ -1,0 +1,176 @@
+/* ============================================================
+   Preset Auto Save — 预设接管下拉排序附加样式
+   作用：为排序条（默认/时间/自定义）与自定义排序编辑器提供样式。
+   放置于 styles/ 目录（与 panel-v4.css 同级），并在 styles/index.css
+   顶部的 @import 区块追加一行：
+       @import url('./sort-addon.css');
+   变量沿用 SillyTavern 主题变量，亮/暗主题均自适应。
+   ============================================================ */
+
+/* ---------- 排序条（位于接管下拉面板顶部） ---------- */
+.pas-sort-bar {
+    display: flex;
+    gap: 4px;
+    padding: 6px 8px;
+    border-bottom: 1px solid var(--SmartThemeBorderColor, #cccccc);
+    flex-wrap: wrap;
+}
+
+.pas-sort-btn {
+    flex: 1;
+    min-width: 44px;
+    padding: 4px 6px;
+    font-size: 12px;
+    border: 1px solid var(--SmartThemeBorderColor, #cccccc);
+    border-radius: 5px;
+    background: var(--black30a, rgba(0, 0, 0, 0.15));
+    color: var(--SmartThemeBodyColor, #222222);
+    cursor: pointer;
+    transition: background-color 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.pas-sort-btn:hover {
+    background: var(--white30a, rgba(255, 255, 255, 0.18));
+}
+
+.pas-sort-btn--active {
+    background: var(--SmartThemeQuoteColor, #4488ff);
+    border-color: var(--SmartThemeQuoteColor, #4488ff);
+    color: #ffffff;
+}
+
+.pas-sort-edit {
+    width: 100%;
+    margin-top: 4px;
+    padding: 4px 6px;
+    font-size: 12px;
+    border: 1px dashed var(--SmartThemeBorderColor, #cccccc);
+    border-radius: 5px;
+    background: transparent;
+    color: var(--SmartThemeBodyColor, #222222);
+    cursor: pointer;
+}
+
+.pas-sort-edit:hover {
+    background: var(--white30a, rgba(255, 255, 255, 0.12));
+}
+
+/* ---------- 自定义排序编辑器（模态） ---------- */
+.pas-cs-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.5);
+    z-index: 99999;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.pas-cs-modal {
+    background: var(--SmartThemeMenuColor, #ffffff);
+    border: 1px solid var(--SmartThemeBorderColor, #cccccc);
+    border-radius: 10px;
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.4);
+    max-width: 420px;
+    width: 90%;
+    max-height: 80vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.pas-cs-popup {
+    padding: 16px;
+    overflow-y: auto;
+}
+
+.pas-cs-popup h3 {
+    margin: 0 0 6px 0;
+    font-size: 1.1em;
+}
+
+.pas-cs-hint {
+    margin: 0 0 12px 0;
+    font-size: 0.85em;
+    opacity: 0.75;
+    color: var(--SmartThemeQuoteColor, #888888);
+}
+
+.pas-cs-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+
+.pas-cs-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    margin-bottom: 4px;
+    border: 1px solid var(--SmartThemeBorderColor, #cccccc);
+    border-radius: 5px;
+    background: var(--black30a, rgba(0, 0, 0, 0.12));
+    cursor: move;
+    user-select: none;
+}
+
+.pas-cs-item:hover {
+    background: var(--white30a, rgba(255, 255, 255, 0.15));
+}
+
+.pas-cs-item.ui-sortable-helper {
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+    opacity: 0.95;
+}
+
+.pas-cs-handle {
+    cursor: grab;
+    opacity: 0.5;
+    width: 16px;
+    text-align: center;
+    flex-shrink: 0;
+}
+
+.pas-cs-handle:active {
+    cursor: grabbing;
+}
+
+.pas-cs-index {
+    flex-shrink: 0;
+    width: 26px;
+    height: 26px;
+    line-height: 26px;
+    text-align: center;
+    font-size: 12px;
+    font-weight: bold;
+    border-radius: 50%;
+    background: var(--black30a, rgba(0, 0, 0, 0.18));
+    color: var(--SmartThemeQuoteColor, #888888);
+}
+
+.pas-cs-name {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.pas-cs-placeholder {
+    height: 40px;
+    margin-bottom: 4px;
+    border: 2px dashed var(--SmartThemeBorderColor, #cccccc);
+    border-radius: 5px;
+    background: var(--white10a, rgba(255, 255, 255, 0.06));
+}
+
+.pas-cs-footer {
+    display: flex;
+    gap: 8px;
+    padding: 12px 16px;
+    border-top: 1px solid var(--SmartThemeBorderColor, #cccccc);
+}
+
+.pas-cs-footer .menu_button {
+    flex: 1;
+}

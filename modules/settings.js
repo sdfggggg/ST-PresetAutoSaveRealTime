@@ -48,7 +48,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
     groupingDefaultExpand: 'current', // 'current' | 'all' | 'none' 系列默认展开策略
 
     // 预设分组嵌套
-    nestingEnabled: true,           // 是否启用嵌套分组功能
+    nestingEnabled: true,            // 是否启用嵌套分组功能
     nestingMaxDepth: 3,             // 最大嵌套深度（1=无嵌套，2=父子，3=祖-父-孙）
     groupingTree: {},               // { [childNormKey]: parentNormKey } 父子关系映射（key和value均为归一化系列键）
 
@@ -59,6 +59,11 @@ export const DEFAULT_SETTINGS = Object.freeze({
 
     // 预设接管下拉面板：打开时默认展开所有组（false = 仅展开当前选中所在组）
     takeoverDefaultExpand: false,
+
+    // —— 新增：预设接管下拉排序 ——
+    // 'default'(字母序) | 'timeline'(导入时间/文件创建时间) | 'custom'(自定义) | 'lastused'(上次使用)
+    takeoverSortMode: 'default',
+    takeoverCustomOrder: [],        // 自定义排序：系列 key 顺序数组（扁平模式） / 根系列 key 顺序（嵌套模式）
 
     // 种子快照：开启分组/接管时为现有预设自动建立 1 条初始快照
     autoSeedOnTakeover: true,       // 是否自动种子（首次接管/检测到新预设时）
@@ -97,6 +102,9 @@ const VALIDATORS = {
     takeoverDefaultStrategy: (v) => (v === 'manual' ? 'manual' : 'latest'),
     seriesDefaultApply: (v) => sanitizeStringMap(v),
     takeoverDefaultExpand: (v) => Boolean(v),
+    // —— 新增：排序字段校验 ——
+    takeoverSortMode: (v) => (v === 'timeline' || v === 'custom' || v === 'lastused' || v === 'default') ? v : 'default',
+    takeoverCustomOrder: (v) => (Array.isArray(v) ? v.filter(x => typeof x === 'string').slice(0, 500) : []),
     autoSeedOnTakeover: (v) => Boolean(v),
     seedSnapshotsDone: (v) => Boolean(v),
     debugMode: (v) => Boolean(v),

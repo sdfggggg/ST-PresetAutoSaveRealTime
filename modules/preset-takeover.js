@@ -1,4 +1,4 @@
-﻿/**
+/**
  * SillyTavern Preset Auto Save - Preset Takeover
  * 预设接管模块（核心特性）— Custom Dropdown Overlay 架构
  *
@@ -139,6 +139,8 @@ export async function initPresetTakeover() {
     _settingUnsubscribe = onSettingChange(({ key }) => {
         if (
             key === 'takeoverEnabled'
+            || key === 'takeoverSortMode'
+            || key === 'takeoverCustomOrder'
             || key === 'groupingManualOverrides'
             || key === 'groupingSeriesAliases'
             || key === 'groupingEnabled'
@@ -181,6 +183,15 @@ export async function initPresetTakeover() {
             _lastSettingsEvtTs = now;
             scheduleRefresh();
         });
+        if (typeof unsub === 'function') {
+            _eventUnsubscribers.push(unsub);
+            boundEventCount++;
+        }
+    } catch (_) {}
+    // 上次使用追踪：预设切换后记录时间戳（覆盖接管下拉之外的原生/插件切换路径）
+    try {
+        const evt = getEventType('OAI_PRESET_CHANGED_AFTER', 'oai_preset_changed_after');
+        const unsub = on(evt, () => recordCurrentPresetLastUsed());
         if (typeof unsub === 'function') {
             _eventUnsubscribers.push(unsub);
             boundEventCount++;
@@ -230,7 +241,14 @@ function computeSelectFingerprint(select) {
     const firstT = getText(opts[0]);
     const lastT = getText(opts[len - 1]);
     const midT = getText(opts[Math.floor(len / 2)]);
-    return `${select.id || select.getAttribute('data-preset-manager-for') || ''}::${len}::${firstT}::${midT}::${lastT}::${select.value}`;
+    // P0-fix: 排序模式 + 自定义顺序纳入指纹。否则仅切换排序时 options 不变，会被守卫误判为
+    // “内容无变化”而走 skipped 分支，只刷新 trigger 文本、不重渲染 panel —— 表现为“排序无法切换”。
+    let sortSig = '';
+    try {
+        const s = getSettings();
+        sortSig = `::${s.takeoverSortMode || 'default'}::${(s.takeoverCustomOrder || []).join('|')}`;
+    } catch (_) { /* getSettings 不可用时忽略 */ }
+    return `${select.id || select.getAttribute('data-preset-manager-for') || ''}::${len}::${firstT}::${midT}::${lastT}::${select.value}${sortSig}`;
 }
 // =====================================================
 // 主刷新逻辑
@@ -388,18 +406,6 @@ function applyTakeoverToSelect(select, forceOverrides = null, forceTree = null) 
             closePanel(panel, trigger);
         }
     });
-    panel.addEventListener('keydown', (e) => {
-        if (e.key === 'Escape') {
-            closePanel(panel, trigger);
-            trigger.focus();
-        } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
-            e.preventDefault();
-            navigateItems(panel, e.key === 'ArrowDown' ? 1 : -1);
-        } else if (e.key === 'Enter') {
-            const focused = panel.querySelector('.pas-dd-item--focused');
-            if (focused) focused.click();
-        }
-    });
     // 点击外部 → 关闭 panel
     const onDocClick = (e) => {
         if (!wrapper.contains(e.target)) {
@@ -420,6 +426,7 @@ function applyTakeoverToSelect(select, forceOverrides = null, forceTree = null) 
 // =====================================================
 // Bug B: forceTree 优先于 settings.groupingTree
 function renderDropdownContent(panel, select, apiId, overrides, seriesDefaults, forceTree = null) {
+    fetchRealTimes(apiId); // 触发后端真实时间拉取（幂等，加载后自动重渲染一次）
     const settings = getSettings();
     // 从 select.options 读取所有预设名和 value
     const optionList = Array.from(select.options || []);
@@ -447,6 +454,7 @@ function renderDropdownContent(panel, select, apiId, overrides, seriesDefaults, 
         const presetName = (option.textContent || '').trim();
         const value = option.value;
         const realName = presetName || value;
+        recordImportTime(apiId, realName);
         if (!realName || _isInvalidPresetName(realName)) {
             standaloneOptions.push({ presetName: realName || value, value });
             continue;
@@ -468,10 +476,10 @@ function renderDropdownContent(panel, select, apiId, overrides, seriesDefaults, 
     }
     // 构建 HTML
     let html = '';
-    // 排序系列：按系列名字母序
-    const sortedSeries = Array.from(seriesGroups.entries()).sort((a, b) =>
-        a[0].localeCompare(b[0])
-    );
+    // 排序条（默认 / 时间 / 自定义）
+    html += buildSortBarHtml(settings);
+    // 排序系列：按当前排序模式（字母序 / 导入时间 / 自定义）
+    const sortedSeries = sortSeriesEntries(Array.from(seriesGroups.entries()), settings, apiId);
     for (const [normKey, items] of sortedSeries) {
         const displayName = seriesDisplayNames.get(normKey) || normKey;
         // 单版本系列 → 作为独立项（除非它是手动覆盖到自定义分组的，需要显示分组名）
@@ -520,6 +528,7 @@ function renderDropdownContent(panel, select, apiId, overrides, seriesDefaults, 
         panel._pasClickBound = true;
     // item 点击 → 切换预设
     panel.addEventListener('click', (e) => {
+        if (handleSortBarClick(e, select, panel)) return;
         const item = e.target.closest('.pas-dd-item');
         if (item) {
             e.stopPropagation();
@@ -556,6 +565,8 @@ function renderDropdownContent(panel, select, apiId, overrides, seriesDefaults, 
  */
 // Bug B: forceTree 优先于 settings.groupingTree
 function renderDropdownNested(panel, select, optionList, currentValue, overrides, settings, forceTree = null) {
+    const apiId = getApiIdOfSelect(select);
+    fetchRealTimes(apiId); // 触发后端真实时间拉取（幂等，加载后自动重渲染一次）
     // 1. 收集有效预设名
     const allPresetNames = [];
     /** @type {Map<string, {value: string, presetName: string, version: string, duplicate: string, manualOverride: boolean}>} */
@@ -565,6 +576,7 @@ function renderDropdownNested(panel, select, optionList, currentValue, overrides
         if (!name || _isInvalidPresetName(name)) continue;
         if (optionsMap.has(name)) continue; // 去重
         allPresetNames.push(name);
+        recordImportTime(apiId, name);
         const info = getSeriesInfo(name, overrides);
         optionsMap.set(name, {
             value: opt.value,
@@ -578,6 +590,27 @@ function renderDropdownNested(panel, select, optionList, currentValue, overrides
     const tree = forceTree || settings.groupingTree || {};
     const maxDepth = settings.nestingMaxDepth || 3;
     const rootNodes = buildNestedGroupTree(allPresetNames, overrides, tree, maxDepth, settings.groupingSeriesAliases || {});
+    // —— 排序根系列（按排序模式）——
+    {
+        const mode = settings.takeoverSortMode || 'default';
+        const customOrder = settings.takeoverCustomOrder || [];
+        if (mode !== 'default') {
+            const timeOfNode = (node) => {
+                let t = Infinity;
+                const names = collectAllPresetNames([node]);
+                for (const n of names) {
+                    const tt = (mode === 'lastused') ? getLastUsedMs(apiId, n) : getImportTime(apiId, n);
+                    if (tt < t) t = tt;
+                }
+                return t;
+            };
+            const sortedRoots = applySortToKeys(rootNodes.map(n => n.key), mode, customOrder, (k) => {
+                const node = rootNodes.find(n => n.key === k);
+                return node ? timeOfNode(node) : Infinity;
+            });
+            rootNodes.sort((a, b) => sortedRoots.indexOf(a.key) - sortedRoots.indexOf(b.key));
+        }
+    }
     //    使用共享函数 getNodePath 获取祖先 key 链，再映射为 displayName 拼接成显示路径
     const keyToDisplay = new Map();
     (function collectDisplayNames(nodes) {
@@ -603,7 +636,7 @@ function renderDropdownNested(panel, select, optionList, currentValue, overrides
         }
     })(rootNodes);
     // 4. 递归渲染 HTML
-    let html = renderNestedDropdownGroups(rootNodes, optionsMap, currentValue, overrides);
+    let html = buildSortBarHtml(settings) + renderNestedDropdownGroups(rootNodes, optionsMap, currentValue, overrides);
     // 5. 无效预设名 → 独立项
     for (const opt of optionList) {
         const name = (opt.textContent || '').trim();
@@ -622,6 +655,7 @@ function renderDropdownNested(panel, select, optionList, currentValue, overrides
     if (!panel._pasClickBound) {
         panel._pasClickBound = true;
         panel.addEventListener('click', (e) => {
+            if (handleSortBarClick(e, select, panel)) return;
             const item = e.target.closest('.pas-dd-item');
             if (item) {
                 e.stopPropagation();
@@ -726,6 +760,8 @@ function onItemClick(select, value, panel) {
         if (actual !== String(value)) {
             logger.warn(`[Takeover] onItemClick: val mismatch — expected="${value}" actual="${actual}"`);
             toast.warning(t('Preset Switch Failed'));
+        } else {
+            recordLastUsed(getApiIdOfSelect(select), String(value));
         }
     } catch (e) {
         logger.warn('[Takeover] onItemClick failed:', e);
@@ -1037,6 +1073,413 @@ function getApiIdOfSelect(select) {
 }
 // escapeAttr 已从 compatibility.js 导入（见文件顶部）
 // compareVersion 已从 preset-grouping.js 统一导入（见文件顶部）
+
+// =====================================================
+// 预设接管下拉排序（默认 / 时间 / 自定义）
+// =====================================================
+const IMPORT_TIME_KEY_PREFIX = 'pas_import_v1::';
+
+// ---- 后端真实时间（文件创建时间）----
+// 端点：POST /api/plugins/preset-realtime/times  body: { apiId }  响应: { times: { [apiId]: { [name]: {birthtimeMs,ctimeMs,mtimeMs} } } }
+const REAL_TIME_API = '/api/plugins/preset-realtime/times';
+const _realTimes = Object.create(null);        // apiId -> { presetName: { birthtimeMs, ctimeMs, mtimeMs } }
+const _realTimesFetching = Object.create(null); // apiId -> Promise（进行中的请求，合并去重）
+const _realTimesLoaded = Object.create(null);   // apiId -> bool（是否已触发过一次重渲染）
+
+/**
+ * 获取 ST 请求头（含有效的 X-CSRF-Token）。
+ * 动态获取，绝不静态 import ST 主脚本（避免模块加载失败拖垮本模块）。
+ * 优先级：ST context.getRequestHeaders → window.getRequestHeaders → 纯 Content-Type。
+ * ⚠️ 绝不能再自行 GET /csrf-token：csrf-sync 的 synchronizerToken 策略下，
+ * 每次 GET 都会重新生成并覆盖服务端 session 中的 token，但 ST 客户端 token
+ * 不会更新，从而导致 ST 自身与本插件此后所有 POST 全部 CSRF 失败。
+ * @returns {object}
+ */
+function getSTHeaders() {
+    try {
+        const ctx = (typeof window !== 'undefined' && window.SillyTavern && typeof window.SillyTavern.getContext === 'function')
+            ? window.SillyTavern.getContext() : null;
+        if (ctx && typeof ctx.getRequestHeaders === 'function') {
+            return ctx.getRequestHeaders();
+        }
+    } catch (_) { /* ignore */ }
+    try {
+        if (typeof window !== 'undefined' && typeof window.getRequestHeaders === 'function') {
+            return window.getRequestHeaders();
+        }
+    } catch (_) { /* ignore */ }
+    return { 'Content-Type': 'application/json' };
+}
+
+/**
+ * 向后端发起真实时间请求（POST）。
+ * 优先使用 jQuery $.ajax —— ST 的 $.ajaxPrefilter 会自动注入它维护的
+ * 正确 X-CSRF-Token，不会污染 session，也不会因外部 import 失败而挂掉。
+ * 兜底：fetch + getSTHeaders()。
+ * @returns {Promise<{ok:boolean, status:number, json:()=>Promise<object>}>}
+ */
+function postRealTimesRequest(apiId) {
+    const jq = (typeof window !== 'undefined' && (window.jQuery || window.$));
+    if (jq && typeof jq.ajax === 'function') {
+        return new Promise((resolve) => {
+            try {
+                jq.ajax({
+                    url: REAL_TIME_API,
+                    method: 'POST',
+                    contentType: 'application/json',
+                    data: JSON.stringify({ apiId }),
+                    success: (data, _textStatus, xhr) => {
+                        resolve({ ok: xhr.status >= 200 && xhr.status < 300, status: xhr.status, json: () => Promise.resolve(data) });
+                    },
+                    error: (xhr) => resolve({ ok: false, status: xhr ? xhr.status : 0, json: () => Promise.resolve(null) }),
+                });
+            } catch (e) {
+                resolve({ ok: false, status: 0, json: () => Promise.resolve(null) });
+            }
+        });
+    }
+    // 兜底：fetch + 动态请求头
+    return fetch(REAL_TIME_API, {
+        method: 'POST',
+        headers: getSTHeaders(),
+        body: JSON.stringify({ apiId }),
+    }).then(resp => ({
+        ok: resp.ok,
+        status: resp.status,
+        json: () => resp.json(),
+    })).catch(() => ({ ok: false, status: 0, json: () => Promise.resolve(null) }));
+}
+
+/**
+ * 从后端拉取某 apiId 下所有预设文件的真实磁盘创建时间。
+ * 幂等：同一 apiId 一次会话只真正拉一次（成功后缓存；进行中合并同一 Promise）。
+ * 拉取成功后仅触发【一次】重渲染，使"时间排序"从 localStorage 近似切换到真实时间。
+ * 任何失败（CSRF/404/网络）都静默回退 localStorage，绝不阻塞主流程。
+ */
+function fetchRealTimes(apiId) {
+    if (!apiId) return Promise.resolve();
+    if (_realTimes[apiId]) return Promise.resolve();
+    if (_realTimesFetching[apiId]) return _realTimesFetching[apiId];
+    _realTimesFetching[apiId] = (async () => {
+        try {
+            const resp = await postRealTimesRequest(apiId);
+            if (!resp.ok) throw new Error('HTTP ' + resp.status);
+            const data = await resp.json();
+            const map = (data && data.times && data.times[apiId]) || {};
+            _realTimes[apiId] = map;
+            logger.info(`[sort] real times loaded for "${apiId}": ${Object.keys(map).length} presets`);
+        } catch (e) {
+            logger.warn(`[sort] real times fetch failed for "${apiId}":`, e && e.message ? e.message : e);
+        } finally {
+            delete _realTimesFetching[apiId];
+        }
+    })();
+    // 首次成功加载后触发一次重渲染（只触发一次，避免刷新环路）
+    _realTimesFetching[apiId].then(() => {
+        if (!_realTimesLoaded[apiId] && _realTimes[apiId] && Object.keys(_realTimes[apiId]).length) {
+            _realTimesLoaded[apiId] = true;
+            try { scheduleRefresh(); } catch (_) { /* ignore */ }
+        }
+    });
+    return _realTimesFetching[apiId];
+}
+
+/** 读真实时间（优先后端真实创建时间，回退 localStorage 近似），未知返回 Infinity */
+function getRealTimeMs(apiId, name) {
+    const rt = _realTimes[apiId];
+    if (rt && rt[name] && typeof rt[name].birthtimeMs === 'number') return rt[name].birthtimeMs;
+    try {
+        const v = localStorage.getItem(IMPORT_TIME_KEY_PREFIX + apiId + '::' + name);
+        if (v != null) return Number(v);
+    } catch (_) { /* ignore */ }
+    return Infinity;
+}
+
+/**
+ * 记录预设"首次被本插件见到"的时间，作为导入时间的近似（自包含，无需后端）。
+ * 该时间持久化在 localStorage，插件重装前一直有效；作为后端不可用时的最终兜底。
+ */
+function recordImportTime(apiId, name) {
+    if (!name) return;
+    try {
+        const key = IMPORT_TIME_KEY_PREFIX + apiId + '::' + name;
+        if (localStorage.getItem(key) == null) {
+            localStorage.setItem(key, String(Date.now()));
+        }
+    } catch (_) { /* localStorage 不可用时忽略 */ }
+}
+
+/** 读取预设导入时间（ms 时间戳），未知返回 Infinity（排最后） */
+function getImportTime(apiId, name) {
+    return getRealTimeMs(apiId, name);
+}
+
+// ---- 上次使用时间（本地记录：用户切换预设时写入）----
+const LASTUSED_KEY_PREFIX = 'pas_lastused_v1::';
+
+/**
+ * 记录预设"上次使用"时间（ms 时间戳）。
+ * 在用户通过接管下拉切换预设、或 ST 原生预设切换事件触发时调用。
+ * 持久化于 localStorage（与导入时间同源策略），作为"上次使用排序"的数据源。
+ */
+function recordLastUsed(apiId, name) {
+    if (!name) return;
+    try {
+        localStorage.setItem(LASTUSED_KEY_PREFIX + apiId + '::' + name, String(Date.now()));
+    } catch (_) { /* localStorage 不可用时忽略 */ }
+}
+
+/**
+ * 读取预设"上次使用"时间（ms），未知返回 Infinity（排最后）。
+ * 未记录过使用时间的预设，回退到导入（文件创建）时间，保证列表稳定。
+ */
+function getLastUsedMs(apiId, name) {
+    try {
+        const v = localStorage.getItem(LASTUSED_KEY_PREFIX + apiId + '::' + name);
+        if (v != null) return Number(v);
+    } catch (_) { /* ignore */ }
+    return getImportTime(apiId, name);
+}
+
+/**
+ * 在 ST 原生预设切换事件（OAI_PRESET_CHANGED_AFTER）后记录"上次使用"。
+ * 覆盖接管下拉之外的切换路径（如原生 select、其它插件触发的切换）。
+ * 带轻量防抖，避免高频重复写入 localStorage。
+ */
+let _lastUsedRecordTs = 0;
+let _lastUsedRecordPending = false;
+function recordCurrentPresetLastUsed() {
+    const now = Date.now();
+    if (now - _lastUsedRecordTs < 250) {
+        _lastUsedRecordTs = now;
+        if (_lastUsedRecordPending) return;
+        _lastUsedRecordPending = true;
+        setTimeout(() => { _lastUsedRecordPending = false; _doRecordCurrentLastUsed(); }, 300);
+        return;
+    }
+    _lastUsedRecordTs = now;
+    _doRecordCurrentLastUsed();
+}
+function _doRecordCurrentLastUsed() {
+    try {
+        const apiId = getCurrentApiId();
+        if (!apiId) return;
+        const selects = document.querySelectorAll(SELECT_SELECTOR);
+        for (const sel of selects) {
+            if (getApiIdOfSelect(sel) === apiId) {
+                const name = sel.value;
+                if (name) recordLastUsed(apiId, String(name));
+                break;
+            }
+        }
+    } catch (_) { /* ignore */ }
+}
+
+/**
+ * 通用 key 排序：根据排序模式对 key 数组排序。
+ * @param {Array} keys
+ * @param {string} mode 'default' | 'timeline' | 'custom'
+ * @param {string[]} customOrder 自定义顺序（series key 数组）
+ * @param {(k:any)=>number} [getTime] 取 key 对应时间的函数（timeline 用）
+ * @returns {Array} 排序后的 key 数组
+ */
+function applySortToKeys(keys, mode, customOrder, getTime) {
+    const arr = Array.from(keys);
+    if (mode === 'timeline') {
+        arr.sort((a, b) => {
+            const ta = getTime ? getTime(a) : Infinity;
+            const tb = getTime ? getTime(b) : Infinity;
+            const ra = ta === Infinity ? 1 : 0;
+            const rb = tb === Infinity ? 1 : 0;
+            if (ra !== rb) return ra - rb;   // 未知时间始终排最后
+            return tb - ta;                  // 最新导入在前
+        });
+    } else if (mode === 'custom') {
+        const order = customOrder || [];
+        arr.sort((a, b) => {
+            const ia = order.indexOf(a);
+            const ib = order.indexOf(b);
+            const ha = ia >= 0, hb = ib >= 0;
+            if (ha && hb) return ia - ib;
+            if (ha) return -1;
+            if (hb) return 1;
+            return String(a).localeCompare(String(b));
+        });
+    } else if (mode === 'lastused') {
+        arr.sort((a, b) => {
+            const ta = getTime ? getTime(a) : Infinity;
+            const tb = getTime ? getTime(b) : Infinity;
+            const ra = ta === Infinity ? 1 : 0;
+            const rb = tb === Infinity ? 1 : 0;
+            if (ra !== rb) return ra - rb;   // 未知使用时间的始终排最后
+            return tb - ta;                  // 最近使用的在前
+        });
+    } else {
+        arr.sort((a, b) => String(a).localeCompare(String(b)));
+    }
+    return arr;
+}
+
+/**
+ * 扁平模式：对 [[normKey, items], ...] 按当前排序模式排序。
+ */
+function sortSeriesEntries(entries, settings, apiId) {
+    const mode = settings.takeoverSortMode || 'default';
+    const customOrder = settings.takeoverCustomOrder || [];
+    const useLastUsed = mode === 'lastused';
+    const timeOf = (items) => {
+        let t = Infinity;
+        for (const it of items) {
+            const tt = useLastUsed ? getLastUsedMs(apiId, it.presetName) : getImportTime(apiId, it.presetName);
+            if (tt < t) t = tt;
+        }
+        return t;
+    };
+    const keys = entries.map(([k]) => k);
+    const sortedKeys = applySortToKeys(keys, mode, customOrder, (k) => {
+        const entry = entries.find(([ek]) => ek === k);
+        return entry ? timeOf(entry[1]) : Infinity;
+    });
+    return entries.slice().sort((a, b) => sortedKeys.indexOf(a[0]) - sortedKeys.indexOf(b[0]));
+}
+
+/** 渲染排序条 HTML（默认 / 时间 / 自定义 + 编辑按钮） */
+function buildSortBarHtml(settings) {
+    const mode = settings.takeoverSortMode || 'default';
+    const mk = (m, label) =>
+        `<button type="button" class="pas-sort-btn${m === mode ? ' pas-sort-btn--active' : ''}" data-sort="${m}">${label}</button>`;
+    const editBtn = mode === 'custom'
+        ? `<button type="button" class="pas-sort-edit" data-action="edit-custom">编辑顺序</button>`
+        : '';
+    return `<div class="pas-sort-bar">${mk('default', '默认')}${mk('timeline', '时间')}${mk('custom', '自定义')}${mk('lastused', '上次')}${editBtn}</div>`;
+}
+
+/**
+ * 收集当前 select 的系列 key 与显示名，供自定义排序编辑器使用。
+ * 扁平模式返回所有系列；嵌套模式返回根系列（normalized key）。
+ */
+function collectSeriesKeysForSort(select, apiId, settings) {
+    const optionList = Array.from(select.options || []);
+    if (settings.nestingEnabled) {
+        const overrides = settings.groupingManualOverrides || {};
+        const tree = settings.groupingTree || {};
+        const maxDepth = settings.nestingMaxDepth || 3;
+        const names = [...new Set(
+            optionList.map(o => (o.textContent || '').trim()).filter(Boolean)
+        )];
+        const rootNodes = buildNestedGroupTree(names, overrides, tree, maxDepth, settings.groupingSeriesAliases || {});
+        return {
+            nesting: true,
+            keys: rootNodes.map(n => n.key),
+            labels: new Map(rootNodes.map(n => [n.key, n.displayName])),
+        };
+    }
+    const overrides = settings.groupingManualOverrides || {};
+    const groups = new Map();
+    const labels = new Map();
+    for (const opt of optionList) {
+        const name = (opt.textContent || '').trim();
+        if (!name || _isInvalidPresetName(name)) continue;
+        const info = getSeriesInfo(name, overrides);
+        const rawKey = info.series || name;
+        const normKey = normalizeSeriesKey(rawKey);
+        if (!groups.has(normKey)) { groups.set(normKey, []); labels.set(normKey, rawKey); }
+        groups.get(normKey).push(name);
+    }
+    return { nesting: false, keys: Array.from(groups.keys()), labels };
+}
+
+/** 自建模态对话框（不依赖外部 popup 模块，降低耦合） */
+function showModal(contentEl, onApply) {
+    const overlay = document.createElement('div');
+    overlay.className = 'pas-cs-overlay';
+    const box = document.createElement('div');
+    box.className = 'pas-cs-modal';
+    box.appendChild(contentEl);
+    const footer = document.createElement('div');
+    footer.className = 'pas-cs-footer';
+    const btnCancel = document.createElement('button');
+    btnCancel.className = 'menu_button';
+    btnCancel.textContent = '取消';
+    const btnApply = document.createElement('button');
+    btnApply.className = 'menu_button';
+    btnApply.textContent = '保存';
+    footer.appendChild(btnCancel);
+    footer.appendChild(btnApply);
+    box.appendChild(footer);
+    overlay.appendChild(box);
+    document.body.appendChild(overlay);
+    const close = () => { if (overlay.parentNode) overlay.parentNode.removeChild(overlay); };
+    btnCancel.addEventListener('click', close);
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+    btnApply.addEventListener('click', () => {
+        try { onApply(); } catch (e) { logger.warn('[Sort] apply failed', e); }
+        close();
+    });
+    return close;
+}
+
+/** 打开自定义排序编辑器（拖拽系列顺序） */
+function openCustomSortEditor(select, apiId) {
+    const settings = getSettings();
+    const { keys, labels } = collectSeriesKeysForSort(select, apiId, settings);
+    let order = (settings.takeoverCustomOrder || []).filter(k => keys.includes(k));
+    const remaining = keys.filter(k => !order.includes(k));
+    const orderedKeys = [...order, ...remaining];
+
+    const items = orderedKeys.map((k, i) => `
+        <li class="pas-cs-item" data-key="${escapeAttr(k)}">
+            <span class="pas-cs-handle"><i class="fas fa-grip-vertical"></i></span>
+            <span class="pas-cs-index">${i + 1}</span>
+            <span class="pas-cs-name">${escapeHtml(labels.get(k) || k)}</span>
+        </li>`).join('');
+    const container = document.createElement('div');
+    container.className = 'pas-cs-popup';
+    container.innerHTML = `
+        <h3>自定义预设顺序</h3>
+        <p class="pas-cs-hint">拖拽系列调整顺序，保存后生效（未列入的系列按名称排在最后）。</p>
+        <ul class="pas-cs-list">${items}</ul>`;
+    const list = container.querySelector('.pas-cs-list');
+    const $ = (window.jQuery || window.$);
+    if ($ && $.fn && $.fn.sortable) {
+        $(list).sortable({ handle: '.pas-cs-handle', axis: 'y', placeholder: 'pas-cs-placeholder' });
+    }
+
+    showModal(container, () => {
+        const newOrder = [];
+        list.querySelectorAll('.pas-cs-item').forEach(li => newOrder.push(li.getAttribute('data-key')));
+        updateSetting('takeoverCustomOrder', newOrder);
+        updateSetting('takeoverSortMode', 'custom');
+        // 强制重建 panel（绕过指纹守卫），确保自定义顺序保存后立即生效
+        _forceNextRefresh = true;
+        refresh();
+    });
+}
+
+/** panel 内排序条点击处理；返回 true 表示已处理（应阻止后续逻辑） */
+function handleSortBarClick(e, select, panel) {
+    const btn = e.target.closest('.pas-sort-btn');
+    if (btn) {
+        e.stopPropagation();
+        const mode = btn.getAttribute('data-sort');
+        if (mode) {
+            updateSetting('takeoverSortMode', mode);
+            // 强制重建 panel（绕过指纹守卫），确保切换排序后下拉内容立即重排
+            _forceNextRefresh = true;
+            refresh();
+        }
+        return true;
+    }
+    const edit = e.target.closest('.pas-sort-edit');
+    if (edit) {
+        e.stopPropagation();
+        const apiId = getApiIdOfSelect(select);
+        openCustomSortEditor(select, apiId);
+        return true;
+    }
+    return false;
+}
+
 // =====================================================
 // 公开 API
 // =====================================================
