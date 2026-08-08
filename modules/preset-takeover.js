@@ -75,6 +75,8 @@ let _refreshSuppressUntil = 0;
 let _forceNextRefresh = false;
 // 时间数据版本号：recordLastUsed / realTimes 刷新时自增，纳入指纹使 timeline/lastused 模式能随操作重排
 let _timesVersion = 0;
+// lastused 内存缓存（apiId -> Map(name -> ms)）：排序时高频读取，避免重复 localStorage.getItem 同步 IO
+const _lastUsedCache = Object.create(null);
 // realTimes 强制刷新的节流时间戳（按 apiId），避免高频拉取打爆后端
 const _realTimesLastForceTs = Object.create(null);
 // Bug fix: 缓存最后一次 refreshTakeover 传入的 overrides/tree，防止 SETTINGS_UPDATED 触发的二次 refresh() 用空值覆盖
@@ -1291,10 +1293,14 @@ const LASTUSED_KEY_PREFIX = 'pas_lastused_v1::';
  */
 function recordLastUsed(apiId, name) {
     if (!name) return;
+    const now = Date.now();
     try {
-        localStorage.setItem(LASTUSED_KEY_PREFIX + apiId + '::' + name, String(Date.now()));
-        _timesVersion++;  // 使用记录变化 → 下次 refresh 在 lastused 模式下重排
+        localStorage.setItem(LASTUSED_KEY_PREFIX + apiId + '::' + name, String(now));
     } catch (_) { /* localStorage 不可用时忽略 */ }
+    // 同步更新内存缓存（排序时直接读 Map，无需再 localStorage.getItem）
+    if (!_lastUsedCache[apiId]) _lastUsedCache[apiId] = new Map();
+    _lastUsedCache[apiId].set(name, now);
+    _timesVersion++;  // 使用记录变化 → 下次 refresh 在 lastused 模式下重排
 }
 
 /**
@@ -1302,9 +1308,18 @@ function recordLastUsed(apiId, name) {
  * 未记录过使用时间的预设，回退到导入（文件创建）时间，保证列表稳定。
  */
 function getLastUsedMs(apiId, name) {
+    // 优先内存缓存（排序时高频读取，避免重复 localStorage.getItem 同步 IO）
+    const cache = _lastUsedCache[apiId];
+    if (cache && cache.has(name)) return cache.get(name);
     try {
         const v = localStorage.getItem(LASTUSED_KEY_PREFIX + apiId + '::' + name);
-        if (v != null) return Number(v);
+        if (v != null) {
+            const n = Number(v);
+            // 回填缓存，后续读取走内存
+            if (!_lastUsedCache[apiId]) _lastUsedCache[apiId] = new Map();
+            _lastUsedCache[apiId].set(name, n);
+            return n;
+        }
     } catch (_) { /* ignore */ }
     // 未记录使用 → 排最后（Infinity），不回退导入/文件时间，确保与 timeline 模式语义区分
     return Infinity;

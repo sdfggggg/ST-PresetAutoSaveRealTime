@@ -9,10 +9,16 @@
 
 /* ---------- 排序条（位于接管下拉面板顶部） ---------- */
 .pas-sort-bar {
+    position: sticky;
+    top: 0;
+    z-index: 6;
     display: flex;
     gap: 4px;
     padding: 6px 8px;
     border-bottom: 1px solid var(--SmartThemeBorderColor, #cccccc);
+    background: var(--SmartThemeBlurTintColor, rgba(20, 20, 30, 0.98));
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
     flex-wrap: wrap;
 }
 
@@ -53,6 +59,31 @@
 
 .pas-sort-edit:hover {
     background: var(--white30a, rgba(255, 255, 255, 0.12));
+}
+
+/* 排序方向切换按钮（正序/倒序） */
+.pas-sort-dir {
+    flex: 0 0 auto;
+    min-width: 56px;
+    padding: 4px 6px;
+    font-size: 12px;
+    font-weight: 600;
+    border: 1px solid var(--SmartThemeBorderColor, #cccccc);
+    border-radius: 5px;
+    background: var(--black30a, rgba(0, 0, 0, 0.15));
+    color: var(--SmartThemeBodyColor, #222222);
+    cursor: pointer;
+    transition: background-color 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.pas-sort-dir:hover {
+    background: var(--white30a, rgba(255, 255, 255, 0.18));
+}
+
+.pas-sort-dir--asc {
+    background: var(--SmartThemeQuoteColor, #4488ff);
+    border-color: var(--SmartThemeQuoteColor, #4488ff);
+    color: #ffffff;
 }
 
 /* ---------- 自定义排序编辑器（模态） ---------- */
@@ -173,4 +204,50 @@
 
 .pas-cs-footer .menu_button {
     flex: 1;
+}
+
+/* ---------- 排序条：滚动时置顶可见（sticky 背景覆盖）---------- */
+body.pas-light .pas-sort-bar {
+    background: var(--SmartThemeBlurTintColor, rgba(244, 246, 251, 0.98));
+}
+
+/* ---------- 移动端自适应 ---------- */
+@media (max-width: 768px) {
+    .pas-sort-bar {
+        gap: 3px;
+        padding: 5px 6px;
+    }
+    .pas-sort-btn {
+        min-width: 38px;
+        padding: 4px 4px;
+        font-size: 11px;
+    }
+    .pas-sort-dir {
+        min-width: 48px;
+        padding: 4px 4px;
+        font-size: 11px;
+    }
+    .pas-sort-edit {
+        font-size: 11px;
+        padding: 4px 6px;
+    }
+}
+
+@media (max-width: 460px) {
+    .pas-sort-bar {
+        gap: 2px;
+        padding: 4px 4px;
+    }
+    .pas-sort-btn {
+        flex: 1 1 0;
+        min-width: 0;
+        padding: 4px 2px;
+        font-size: 11px;
+    }
+    .pas-sort-dir {
+        flex: 0 0 auto;
+        min-width: 44px;
+        padding: 4px 4px;
+        font-size: 11px;
+    }
 }
