@@ -8,7 +8,7 @@
     "version": "1.0.0",
     "homePage": "https://github.com/SillyTavern-Extras/SillyTavern-PresetAutoSave",
     "auto_update": true,
-    "minimum_client_version": "1.10.0",
+    "minimum_client_version": "1.0.0",
     "i18n": {
         "en-us": "i18n/en-us.json",
         "zh-cn": "i18n/zh-cn.json"
