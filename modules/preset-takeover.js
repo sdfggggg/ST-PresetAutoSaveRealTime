@@ -951,8 +951,12 @@ function openPanel(panel, trigger) {
             chevron.classList.add('fa-chevron-up');
         }
     }
-    // panel 仍留在 wrapper 内 → panel.parentElement 即 wrapper
+    // portal panel 到 body 避免 wrapper/drawer 的 transformed 0 宽祖先裁剪 fixed panel
+    // （refresh 只重写 panel.innerHTML 不重建 DOM，panel 永久留 body 即可；closePanel 仅 display:none）
     const wrapper = panel.parentElement;
+    if (wrapper && wrapper !== document.body) {
+        document.body.appendChild(panel);
+    }
     if (wrapper) {
         const select = wrapper.querySelector('select');
         if (select) {
