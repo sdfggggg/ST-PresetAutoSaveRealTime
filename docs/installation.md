@@ -4,20 +4,24 @@
 
 - SillyTavern 1.0 及以上（manifest 已放宽版本要求；已在 1.1.18 / 1.12.x 验证）
 - 现代浏览器（Chrome/Edge ≥90、Firefox ≥88、Safari ≥14），移动端也行
-- 想用「时间」排序：还需单独部署后端插件 preset-realtime（见下方章节）
+- **本插件是「单个前端扩展」即可工作**：所有排序（默认 / 时间 / 自定义 / 上次）、
+  正倒序、移动端适配都内置在前端，**不需要任何后端插件**。
 
-## ⚠️ 必读：时间排序需要独立后端插件
+## 关于「时间」排序：后端插件是「可选增强」，不是必需
 
-排序功能里的「时间」按钮要读取**预设文件的真实修改时间**，浏览器读不到服务器磁盘，
-所以必须有一个服务器端插件（`preset-realtime`）提供数据。
+「时间」排序默认就能用，它有两个数据源，**任意一个可用即可**：
 
-**ST 的「扩展管理器 / git 安装」只会拉取前端界面代码，不会自动安装后端插件。**
-如果你发现「时间」按钮点了顺序不对（或所有预设挤在一起），
-几乎都是因为后端插件没装。前端扩展装好后，还要单独做下面这一步：
-把仓库里的 `preset-realtime-server/` 复制成 ST 的插件目录 `plugins/preset-realtime/`，
-然后**重启 ST 服务**（见文末命令）。
+1. **内置本地时间（默认开启，无需后端）**：插件在构建下拉时记录每个预设"首次见到"的时间，
+   并在每次自动/手动保存后更新该时间。于是云端只装这一个前端扩展，
+   「时间」排序也会按"最近保存/导入"重排——**完全不需要部署后端**。
+2. **后端真实文件时间（可选增强）**：若你额外部署了 `preset-realtime` 服务端插件，
+   接管层会优先使用预设文件的真实磁盘修改时间（mtime），排序更精确。
+   仅当想要"真实文件 mtime"时才需要它；不装也完全不影响功能。
 
-上次使用排序不依赖后端，单独的 localStorage 即可工作。
+> 一句话：**云端用户只用「扩展管理器 / git 安装」这一个前端扩展就够了**，
+> 不要被"需要后端"的旧说法误导。后文保留后端部署步骤，仅供想要真实 mtime 的本地用户参考。
+
+上次使用排序同样不依赖后端，单独的 localStorage 即可工作。
 
 ## 怎么装
 
@@ -27,15 +31,15 @@
 2. 右上角拼图图标 🧩 →「管理扩展」
 3. 填入地址：
    ```
-   https://github.com/SillyTavern-Extras/SillyTavern-PresetAutoSave
+   https://github.com/sdfggggg/ST-PresetAutoSaveRealTime
    ```
-4. 点安装 → 刷新页面 → 完事
+4. 点安装 → 刷新页面 → 完事（**这就是全部，不需要再装任何后端**）
 
 ### 方法二：Git 克隆
 
 ```bash
 cd data/<你的用户名>/extensions/third-party
-git clone https://github.com/SillyTavern-Extras/SillyTavern-PresetAutoSave
+git clone https://github.com/sdfggggg/ST-PresetAutoSaveRealTime
 ```
 
 刷新页面就好。
@@ -43,7 +47,7 @@ git clone https://github.com/SillyTavern-Extras/SillyTavern-PresetAutoSave
 ### 方法三：手动下载
 
 1. GitHub 仓库 → `Code` → `Download ZIP`
-2. 解压到 `data/<你的用户名>/extensions/third-party/SillyTavern-PresetAutoSave/`
+2. 解压到 `data/<你的用户名>/extensions/third-party/ST-PresetAutoSaveRealTime/`
 3. 刷新页面
 
 > 手动下载的话后续不会自动更新，得自己重新下。
@@ -77,22 +81,24 @@ git pull
 
 ---
 
-## 部署后端时间插件（时间排序必需）
+## （可选）部署后端时间插件 —— 仅用于"真实文件 mtime"
 
-> 仅当你要用「时间」排序时才需要。复制目录并重命名为 `plugins/preset-realtime`，然后**重启 ST 服务**。
+> **绝大多数用户不需要这一步。** 前端扩展自带的本地时间已能让「时间」排序正常工作。
+> 只有当你希望排序严格按"预设文件在磁盘上的真实修改时间"时才部署它。
+
+把仓库里的 `preset-realtime-server/` 复制成 ST 的插件目录 `plugins/preset-realtime`，然后**重启 ST 服务**：
 
 ```bash
 # 在你的 SillyTavern 根目录（包含 plugins/ 的那一层）执行：
-# 假设前端扩展装在 third-party/ST-PresetAutoSaveRealTime/
-cp -r public/scripts/extensions/third-party/ST-PresetAutoSaveRealTime/preset-realtime-server plugins/preset-realtime
-# 或从仓库根直接操作：
-# cp -r <仓库>/preset-realtime-server plugins/preset-realtime
+cp -r <仓库>/preset-realtime-server plugins/preset-realtime
 
 # 重启 ST 服务后刷新页面，打开预设下拉点「时间」，
-# F12 控制台出现 "[sort] real times loaded" 即表示后端生效。
+# F12 控制台出现 "[sort] real times loaded" 即表示后端生效（接管层改用真实 mtime）。
 ```
 
 Windows 用户用资源管理器把 `preset-realtime-server` 文件夹整体复制到 `plugins\` 并改名为 `preset-realtime` 也一样。
+
+> 注意：后端插件不部署时，「时间」排序自动回退到本地时间，功能依旧完整，不会报错或卡死。
 
 ---
 

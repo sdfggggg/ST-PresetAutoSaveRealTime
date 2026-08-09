@@ -1041,6 +1041,22 @@ async function submitSavePayload(payload, trigger, reason, { detailed = false } 
     return detailed ? outcome : null;
 }
 
+/**
+ * 触碰预设的"导入/修改时间"时间戳（仅本地 localStorage）。
+ * 与 modules/preset-takeover.js 中的 IMPORT_TIME_KEY_PREFIX 共用同一键格式
+ * `pas_import_v1::<apiId>::<name>`，因此未部署后端 preset-realtime 时
+ * （例如云端只装前端扩展这"一个插件"），"时间"排序也能反映最近一次
+ * 自动/手动保存的时刻，使单插件部署也能随编辑重排。
+ * 若后端在线，接管层优先使用真实文件 mtime，本写入不会被读取、不会覆盖真实时间。
+ */
+const PAS_IMPORT_TIME_KEY_PREFIX = 'pas_import_v1::';
+function touchPresetImportTimeOnSave(apiId, name) {
+    if (!apiId || !name) return;
+    try {
+        localStorage.setItem(PAS_IMPORT_TIME_KEY_PREFIX + apiId + '::' + name, String(Date.now()));
+    } catch (_) { /* localStorage 不可用时忽略 */ }
+}
+
 async function executeSaveRequest(request) {
     const {
         trigger, reason, apiId, presetName, preset, newHash, fingerprint,
@@ -1079,6 +1095,12 @@ async function executeSaveRequest(request) {
             commitHistory: () => addSnapshot(presetName, apiId, preset, trigger),
         });
         const snapshot = transaction.snapshot;
+
+        // 触碰本地"时间排序"时间戳：与 preset-takeover 的 IMPORT_TIME_KEY_PREFIX 共用同一键。
+        // 作用：未部署后端 preset-realtime 时（如云端只装前端扩展这一"单个插件"），
+        // "时间"排序也能反映最近一次（自动/手动）保存时刻，从而随编辑重排。
+        // 若后端在线，接管层优先使用真实文件 mtime，本写入不会被读取、不会覆盖真实时间。
+        touchPresetImportTimeOnSave(apiId, presetName);
 
         if (!snapshot) {
             // 预设已成功落盘；history store 判断无需新增记录。
