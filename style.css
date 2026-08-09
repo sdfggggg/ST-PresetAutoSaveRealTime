@@ -3787,6 +3787,12 @@ body.pas-light .pas-btn-confirm-green:hover {
 /* --- 移动端适配 --- */
 @media (max-width: 768px) {
     .pas-dd-panel {
+        /* 修复：窄 wrapper 下 CSS 'width: max-content' 解析为 0、min-width:100% 又只等于
+           窄 wrapper 宽度，导致面板/排序条视觉宽度为 0、不可见。
+           改用确定的视口宽度（受 refresh 重建影响也恒正确，不依赖 JS inline）。 */
+        width: min(420px, calc(100vw - 16px));
+        min-width: 0;
+        max-width: min(420px, calc(100vw - 16px));
         max-height: 320px;
     }
     .pas-dd-group-header {
