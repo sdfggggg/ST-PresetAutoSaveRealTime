@@ -928,7 +928,13 @@ function openPanel(panel, trigger) {
         maxW = Math.min(380, Math.max(200, available));
     }
     panel.style.maxWidth = maxW + 'px';
-    
+    // 修复：移动端窄 wrapper 下 CSS `width: max-content` 被解析为 0、
+    // `min-width:100%` 又只等于窄 wrapper 宽度，导致面板视觉宽度 0、排序条不可见。
+    // 移动端显式给一个确定宽度（视口-16，至少 240px），桌面端保留 max-content 自适应。
+    if (isMobile) {
+        panel.style.width = Math.max(240, window.innerWidth - 16) + 'px';
+    }
+
     if (trigger) {
         trigger.classList.add('pas-dd-trigger--open');
         const chevron = trigger.querySelector('.pas-dd-chevron');
