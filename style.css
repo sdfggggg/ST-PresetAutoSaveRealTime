@@ -3580,15 +3580,16 @@ body.pas-light .pas-btn-confirm-green:hover {
 }
 
 /* --- 下拉面板 --- */
-/* 阶段9紧急修复：恢复 width:max-content 按内容自适应（绕过 compact 主题下 wrapper 过窄问题） */
+/* 修复：去掉不可靠的 'width: max-content'（在 absolute + flex 父级 / 移动端窄 wrapper 下
+   解析为 0，导致面板与排序条视觉坍缩不可见）。改用与视口挂钩的确定宽度，所有视口恒有效，
+   且不受 refresh() 重建 DOM 影响。 */
 .pas-dd-panel {
     display: none;
     position: absolute;
     top: calc(100% + 4px);
     left: 0;
-    width: max-content;
-    min-width: 100%;
-    max-width: min(380px, calc(100vw - 32px));
+    width: min(560px, calc(100vw - 32px));
+    max-width: min(560px, calc(100vw - 32px));
     z-index: 9999;
     max-height: 400px;
     overflow-y: auto;
