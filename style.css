@@ -3580,13 +3580,13 @@ body.pas-light .pas-btn-confirm-green:hover {
 }
 
 /* --- 下拉面板 --- */
-/* 修复：去掉不可靠的 'width: max-content'（在 absolute + flex 父级 / 移动端窄 wrapper 下
-   解析为 0，导致面板与排序条视觉坍缩不可见）。改用与视口挂钩的确定宽度，所有视口恒有效，
-   且不受 refresh() 重建 DOM 影响。 */
+/* 修复：移动端设置抽屉 flex 布局会把 .pas-dd-wrapper 压成 0 宽，
+   position:absolute 相对 0 宽 containing block + 抽屉 overflow:hidden 裁剪导致面板视觉 0 宽。
+   改用 position:fixed 脱离 wrapper，固定在 trigger 位置（openPanel 动态设 left/top）。 */
 .pas-dd-panel {
     display: none;
-    position: absolute;
-    top: calc(100% + 4px);
+    position: fixed;
+    top: 0;
     left: 0;
     width: min(560px, calc(100vw - 32px));
     max-width: min(560px, calc(100vw - 32px));

@@ -934,6 +934,14 @@ function openPanel(panel, trigger) {
     if (isMobile) {
         panel.style.width = Math.max(240, window.innerWidth - 16) + 'px';
     }
+    // 根治：position:fixed 脱离 wrapper（mobile 设置抽屉 flex shrink 会把 wrapper 压成 0 宽，
+    // 导致 position:absolute 面板被 0 宽 containing block + 抽屉 overflow:hidden 裁剪至不可见）。
+    // 改为 fixed 并把面板固定到 trigger 下方相对视口，所有视口恒可见。
+    panel.style.position = 'fixed';
+    const _minLeft = 8;
+    const _maxLeft = window.innerWidth - 16 - 240;
+    panel.style.left = Math.max(_minLeft, Math.min(triggerRect.left, _maxLeft > _minLeft ? _maxLeft : _minLeft)) + 'px';
+    panel.style.top = (triggerRect.bottom + 4) + 'px';
 
     if (trigger) {
         trigger.classList.add('pas-dd-trigger--open');
