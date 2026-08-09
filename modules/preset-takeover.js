@@ -475,11 +475,12 @@ function renderDropdownContent(panel, select, apiId, overrides, seriesDefaults, 
     const seriesGroups = new Map();          // normKey → items[]
     const seriesDisplayNames = new Map();    // normKey → 首次出现的原始大小写名
     const standaloneOptions = []; // 不参与分组的
-    for (const option of optionList) {
+    for (let _i = 0; _i < optionList.length; _i++) {
+        const option = optionList[_i];
         const presetName = (option.textContent || '').trim();
         const value = option.value;
         const realName = presetName || value;
-        recordImportTime(apiId, realName);
+        recordImportTime(apiId, realName, _i);
         if (!realName || _isInvalidPresetName(realName)) {
             standaloneOptions.push({ presetName: realName || value, value });
             continue;
@@ -596,12 +597,13 @@ function renderDropdownNested(panel, select, optionList, currentValue, overrides
     const allPresetNames = [];
     /** @type {Map<string, {value: string, presetName: string, version: string, duplicate: string, manualOverride: boolean}>} */
     const optionsMap = new Map();
-    for (const opt of optionList) {
+    for (let _i = 0; _i < optionList.length; _i++) {
+        const opt = optionList[_i];
         const name = (opt.textContent || '').trim();
         if (!name || _isInvalidPresetName(name)) continue;
         if (optionsMap.has(name)) continue; // 去重
         allPresetNames.push(name);
-        recordImportTime(apiId, name);
+        recordImportTime(apiId, name, _i);
         const info = getSeriesInfo(name, overrides);
         optionsMap.set(name, {
             value: opt.value,
@@ -913,7 +915,19 @@ function openPanel(panel, trigger) {
     panel.style.display = 'block';
     // 阶段11：动态 max-width（面板左边缘到视口右边缘-16px安全边距）
     const triggerRect = trigger.getBoundingClientRect();
-    panel.style.maxWidth = Math.min(380, window.innerWidth - triggerRect.left - 16) + 'px';
+    const available = Math.max(0, window.innerWidth - triggerRect.left - 16);
+    // 修复：移动端 trigger 靠右时 available 坍缩到几十 px，导致面板/排序条宽度为 0 不可用。
+    // 移动端用视口宽度做上限并设最小可读宽度 240px，让排序条 flex-wrap 正常换行。
+    const isMobile = window.innerWidth <= 520;
+    let maxW;
+    if (isMobile) {
+        const viewportCap = Math.max(240, window.innerWidth - 16);
+        maxW = Math.min(viewportCap, 420);
+        if (available < 200) maxW = Math.max(maxW, 280);
+    } else {
+        maxW = Math.min(380, Math.max(200, available));
+    }
+    panel.style.maxWidth = maxW + 'px';
     
     if (trigger) {
         trigger.classList.add('pas-dd-trigger--open');
@@ -1131,6 +1145,12 @@ function getApiIdOfSelect(select) {
 // 预设接管下拉排序（默认 / 时间 / 自定义）
 // =====================================================
 const IMPORT_TIME_KEY_PREFIX = 'pas_import_v1::';
+// 导入时间兜底基准（固定过去时间戳）：recordImportTime 传入 nativeIndex 时，
+// 存储 BASELINE + index*1000，使每个预设获得稳定且可区分的“时间”，
+// 满足云端无后端时 timeline 排序仍可重排、方向切换可见。
+// 取值：2023-11-15 的 epoch ms，远早于任何真实文件 mtime（~2026 现 ~1.75e12），
+// 确保后端真实时间（更大）天然排在兜底值之前，与“真 mtime 更新优先”语义一致。
+const IMPORT_TIME_BASELINE = 1700000000000;
 
 // ---- 后端真实时间（文件创建时间）----
 // 端点：POST /api/plugins/preset-realtime/times  body: { apiId }  响应: { times: { [apiId]: { [name]: {birthtimeMs,ctimeMs,mtimeMs} } } }
@@ -1268,12 +1288,25 @@ function getRealTimeMs(apiId, name) {
  * 记录预设"首次被本插件见到"的时间，作为导入时间的近似（自包含，无需后端）。
  * 该时间持久化在 localStorage，插件重装前一直有效；作为后端不可用时的最终兜底。
  */
-function recordImportTime(apiId, name) {
+/**
+ * 记录预设“首次被本插件见到”的时间，作为无后端时的最终兜底。
+ * - 传入 nativeIndex（推荐）：写入 BASELINE + index*1000，使每个预设获得
+ *   稳定且可区分的伪时间，timeline 排序与方向切换在云端无后端时真正可见。
+ * - 未传 nativeIndex：回退为 Date.now()（兼容自动保存触碰等仅知 (apiId,name) 的场景）。
+ * 该时间持久化于 localStorage；后端真实文件 mtime 始终优先（更大）。
+ */
+function recordImportTime(apiId, name, nativeIndex) {
     if (!name) return;
     try {
         const key = IMPORT_TIME_KEY_PREFIX + apiId + '::' + name;
         if (localStorage.getItem(key) == null) {
-            localStorage.setItem(key, String(Date.now()));
+            let v;
+            if (typeof nativeIndex === 'number' && Number.isFinite(nativeIndex) && nativeIndex >= 0) {
+                v = String(IMPORT_TIME_BASELINE + nativeIndex * 1000);
+            } else {
+                v = String(Date.now());
+            }
+            localStorage.setItem(key, v);
         }
     } catch (_) { /* localStorage 不可用时忽略 */ }
 }
