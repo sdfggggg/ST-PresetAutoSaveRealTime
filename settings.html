@@ -1,0 +1,53 @@
+<!--
+  Settings panel skeleton for the `preset-sorter` extension.
+
+  All user-visible text is injected by `src/settings-ui.js` from the extension's
+  built-in i18n dictionary, so this template is language-neutral. Only the
+  element ids/classes are part of the contract between the template and the
+  settings controller:
+
+  #preset_sorter_settings          root panel (appended to #extensions_settings2)
+  #preset_sorter_title             drawer title
+  #preset_sorter_enabled           enable toggle
+  #preset_sorter_enabled_label     enable toggle label
+  #preset_sorter_default_mode      default sort mode <select>
+  #preset_sorter_default_mode_label default sort mode label
+  #preset_sorter_apply_all         "apply to all preset managers" toggle
+  #preset_sorter_apply_all_label   "apply to all" label
+  #preset_sorter_refresh           refresh import times button
+  #preset_sorter_reset_usage       reset usage stats button
+  #preset_sorter_diagnostics       diagnostics lines container
+  #preset_sorter_hint              small hint line
+-->
+<div id="preset_sorter_settings" class="preset-sorter-settings">
+    <div class="inline-drawer">
+        <div class="inline-drawer-toggle inline-drawer-header">
+            <b id="preset_sorter_title">Preset Sorter</b>
+            <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
+        </div>
+        <div class="inline-drawer-content">
+            <label class="checkbox_label preset-sorter-row">
+                <input id="preset_sorter_enabled" type="checkbox">
+                <span id="preset_sorter_enabled_label">Enable preset sorting</span>
+            </label>
+
+            <div class="preset-sorter-row">
+                <label id="preset_sorter_default_mode_label" for="preset_sorter_default_mode">Default sort mode</label>
+                <select id="preset_sorter_default_mode" class="text_pole preset-sorter-mode-select"></select>
+            </div>
+
+            <label class="checkbox_label preset-sorter-row">
+                <input id="preset_sorter_apply_all" type="checkbox">
+                <span id="preset_sorter_apply_all_label">Apply to all preset managers</span>
+            </label>
+
+            <div class="preset-sorter-row preset-sorter-actions">
+                <button id="preset_sorter_refresh" class="menu_button" type="button">Refresh import times</button>
+                <button id="preset_sorter_reset_usage" class="menu_button" type="button">Reset usage stats</button>
+            </div>
+
+            <div id="preset_sorter_diagnostics" class="preset-sorter-diagnostics"></div>
+            <small id="preset_sorter_hint" class="preset-sorter-hint"></small>
+        </div>
+    </div>
+</div>

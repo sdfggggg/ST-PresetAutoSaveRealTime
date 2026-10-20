@@ -1,0 +1,123 @@
+/**
+ * Styles for the `preset-sorter` extension.
+ *
+ * Design goals:
+ * - use SillyTavern theme variables (with fallbacks) so the UI matches any theme;
+ * - stay compact and mobile-safe: no fixed widths, no horizontal overflow;
+ * - only style extension-owned elements (`#preset_sorter_settings`,
+ *   `.preset-sorter-sort-control`) and never restyle upstream preset selects.
+ */
+
+/* ---------------------------------------------------------------------------
+ * Sort mode <select> injected next to each preset manager select
+ * ------------------------------------------------------------------------- */
+
+.preset-sorter-sort-control {
+    flex: 0 0 auto;
+    width: auto;
+    max-width: 12em;
+    min-width: 6em;
+    margin: 0 0 0 4px;
+    padding: 1px 4px;
+    font-size: 0.9em;
+    align-self: center;
+    color: var(--SmartThemeBodyColor, #dcdcdc);
+    border: 1px solid var(--SmartThemeBorderColor, #5c5c5c);
+    border-radius: 4px;
+    background-color: var(--SmartThemeBlurTintColor, rgba(35, 35, 35, 0.95));
+}
+
+.preset-sorter-sort-control:focus-visible {
+    outline: 2px solid var(--SmartThemeQuoteColor, #7aa2f7);
+    outline-offset: 1px;
+}
+
+/* Keep the sort control usable on narrow/mobile layouts without stretching rows. */
+@media (max-width: 480px) {
+    .preset-sorter-sort-control {
+        max-width: 38vw;
+        min-width: 0;
+        font-size: 0.85em;
+    }
+}
+
+/* ---------------------------------------------------------------------------
+ * Settings panel (appended to #extensions_settings2)
+ * ------------------------------------------------------------------------- */
+
+#preset_sorter_settings .preset-sorter-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    margin: 4px 0;
+}
+
+#preset_sorter_settings .preset-sorter-row > label {
+    flex: 0 1 auto;
+    margin: 0;
+}
+
+#preset_sorter_settings .preset-sorter-mode-select {
+    flex: 1 1 8em;
+    min-width: 8em;
+    max-width: 100%;
+}
+
+#preset_sorter_settings .preset-sorter-actions {
+    gap: 8px;
+    margin-top: 8px;
+}
+
+#preset_sorter_settings .preset-sorter-actions .menu_button {
+    flex: 0 1 auto;
+    min-height: 2em;
+    padding: 2px 10px;
+}
+
+#preset_sorter_settings .preset-sorter-actions .menu_button[disabled] {
+    opacity: 0.6;
+    cursor: default;
+}
+
+#preset_sorter_settings .preset-sorter-diagnostics {
+    margin-top: 8px;
+    padding: 6px 8px;
+    font-size: 0.8em;
+    line-height: 1.45;
+    overflow-wrap: anywhere;
+    border-radius: 4px;
+    background-color: var(--black30a, rgba(0, 0, 0, 0.18));
+}
+
+#preset_sorter_settings .preset-sorter-diagnostics:empty {
+    display: none;
+}
+
+#preset_sorter_settings .preset-sorter-diagnostics .preset-sorter-diag-line {
+    display: block;
+}
+
+#preset_sorter_settings .preset-sorter-diagnostics .preset-sorter-diag-value {
+    color: var(--SmartThemeQuoteColor, #9ecbff);
+    font-weight: 500;
+}
+
+#preset_sorter_settings .preset-sorter-hint {
+    display: block;
+    margin-top: 6px;
+    font-size: 0.78em;
+    line-height: 1.4;
+    opacity: 0.8;
+}
+
+@media (max-width: 480px) {
+    #preset_sorter_settings .preset-sorter-actions {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    #preset_sorter_settings .preset-sorter-actions .menu_button {
+        width: 100%;
+    }
+}

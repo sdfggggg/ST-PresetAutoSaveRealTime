@@ -1,0 +1,12 @@
+{
+  "display_name": "Preset Sorter",
+  "loading_order": 100,
+  "requires": [],
+  "optional": [],
+  "js": "index.js",
+  "css": "style.css",
+  "author": "TauriTavern community",
+  "version": "1.0.0",
+  "description": "Sorts preset dropdowns by import time and usage statistics. Reads file timestamps from the TauriTavern host and falls back to first-seen tracking in plain SillyTavern.",
+  "auto_update": false
+}
