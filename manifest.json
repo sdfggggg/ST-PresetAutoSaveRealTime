@@ -6,7 +6,7 @@
   "js": "index.js",
   "css": "style.css",
   "author": "TauriTavern community",
-  "version": "1.1.0",
-  "description": "Sorts preset dropdowns by import time and usage statistics. Pick a sort field (default order / import time / usage count / recently used) and toggle the independent descending checkbox. Reads file timestamps from the TauriTavern host and falls back to first-seen tracking in plain SillyTavern.",
+  "version": "1.2.0",
+  "description": "Sorts preset dropdowns by import time and usage statistics (independent field + ascending/descending controls) and can group same-series presets into native optgroup sections, with automatic smart/strict detection and a manual group manager. Reads file timestamps from the TauriTavern host and falls back to first-seen tracking in plain SillyTavern.",
   "auto_update": false
 }

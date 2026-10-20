@@ -22,13 +22,17 @@
 import {
     DEFAULT_DIRECTION,
     DEFAULT_FIELD,
+    DEFAULT_GROUPING_MODE,
     EXTENSION_NAME,
     EXTENSION_VERSION,
     FIELD_ORDER,
+    GROUPING_MODE_ORDER,
+    GROUPING_UNGROUPED,
     SORT_DIRECTIONS,
     SORT_FIELDS,
 } from './constants.js';
 import {
+    applyGroupedOptionOrder,
     applyOptionOrder,
     discoverPresetManagers,
     injectSortControl,
@@ -39,11 +43,12 @@ import {
     readSelectedOption,
     updateOptionTooltips,
 } from './dom-bridge.js';
+import { aggregateGroupStats, groupPresetItems, normalizeGroupingMode } from './grouping-engine.js';
 import { createHostFs } from './host-fs.js';
 import { setLocale, t } from './i18n.js';
 import { isSupportedPresetApi, normalizePresetApiId } from './preset-file.js';
 import { mountSettingsPanel } from './settings-ui.js';
-import { computePresetOrderByField, fieldDirectionToMode } from './sort-engine.js';
+import { computeGroupedEntityOrder, computePresetOrderByField, fieldDirectionToMode } from './sort-engine.js';
 import { createStatsStore } from './stats-store.js';
 
 const LOG_PREFIX = '[preset-sorter]';
@@ -312,16 +317,64 @@ function resolveTauriPathApi() {
  */
 
 /**
+ * @typedef {object} GroupingSettings
+ * @property {boolean} enabled Whether native `<optgroup>` grouping is enabled.
+ * @property {string} mode Auto-detection mode (`smart` | `strict`).
+ * @property {Record<string, Record<string, string>>} overrides Manual group overrides per API (`apiId -> {presetName -> groupName | __ungrouped__}`).
+ */
+
+/**
  * @typedef {object} PresetSorterSettings
  * @property {boolean} enabled Whether sorting is enabled.
  * @property {boolean} applyToAll Whether every manager uses `default`.
  * @property {SortSpec} default Default field + direction.
  * @property {Record<string, SortSpec>} perApi Per-API field + direction (used when `applyToAll` is off).
+ * @property {GroupingSettings} grouping Preset grouping settings (v1.2.0, additive/backward compatible).
  * @property {object|null} stats Persisted stats payload.
  */
 
 /** The upstream default: no reordering until the user picks a real field. @type {Readonly<SortSpec>} */
 const DEFAULT_SPEC = Object.freeze({ field: DEFAULT_FIELD, direction: DEFAULT_DIRECTION });
+
+/**
+ * Normalises the additive v1.2.0 grouping settings block (missing block -> defaults,
+ * so v1.1.0 payloads migrate silently).
+ *
+ * @param {unknown} raw Persisted grouping block.
+ * @returns {GroupingSettings} Normalised grouping settings.
+ */
+function normalizeGroupingSettings(raw) {
+    const source = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+    /** @type {Record<string, Record<string, string>>} */
+    const overrides = {};
+    if (source.overrides && typeof source.overrides === 'object' && !Array.isArray(source.overrides)) {
+        for (const [rawApiId, rawMap] of Object.entries(source.overrides)) {
+            const apiId = normalizePresetApiId(String(rawApiId));
+            if (!isSupportedPresetApi(apiId) || !rawMap || typeof rawMap !== 'object' || Array.isArray(rawMap)) {
+                continue;
+            }
+            /** @type {Record<string, string>} */
+            const cleanMap = {};
+            for (const [presetName, groupName] of Object.entries(rawMap)) {
+                if (typeof presetName !== 'string' || presetName === '' || typeof groupName !== 'string') {
+                    continue;
+                }
+                const value = groupName.trim();
+                if (value !== '') {
+                    cleanMap[presetName] = value;
+                }
+            }
+            if (Object.keys(cleanMap).length > 0) {
+                overrides[apiId] = cleanMap;
+            }
+        }
+    }
+    return {
+        enabled: source.enabled !== false,
+        mode: normalizeGroupingMode(source.mode === undefined ? DEFAULT_GROUPING_MODE : source.mode),
+        overrides,
+    };
+}
 
 /**
  * v1.0.x combined sort mode -> v1.1.0 field + direction (silent migration map).
@@ -416,6 +469,7 @@ function loadSettings(raw) {
         applyToAll: source.applyToAll !== false,
         default: defaultSpec,
         perApi,
+        grouping: normalizeGroupingSettings(source.grouping),
         stats: source.stats && typeof source.stats === 'object' ? source.stats : null,
     };
 }
@@ -665,15 +719,14 @@ function getSortStats(apiId, name) {
 }
 
 /**
- * Computes the desired option order for a manager.
- *
- * The "default" field always restores the upstream order tracked in
- * `state.originalOrder` (which survives re-sorting and option repopulation).
+ * Collects the upstream-ordered preset items (placeholders separated) for one
+ * manager. The "default" field always relies on `state.originalOrder`, which
+ * survives re-sorting and option repopulation.
  *
  * @param {PresetManagerState} state Manager state.
- * @returns {Array<{name: string, value: string}>} Desired option order (placeholders first).
+ * @returns {{placeholders: Array<{name: string, value: string}>, baseItems: Array<{name: string, value: string}>}} Collected items.
  */
-function desiredItemsForState(state) {
+function collectBaseState(state) {
     const entries = readOptionEntries(state.select);
     const placeholders = entries.filter(entry => isPresetPlaceholder(state.apiId, entry));
     const presets = entries.filter(entry => !isPresetPlaceholder(state.apiId, entry));
@@ -702,22 +755,65 @@ function desiredItemsForState(state) {
         baseItems.push({ name: entry.name, value: entry.value });
     }
 
+    return {
+        placeholders: placeholders.map(entry => ({ name: entry.name, value: entry.value })),
+        baseItems,
+    };
+}
+
+/**
+ * Computes the desired **flat** option order for a manager (grouping disabled).
+ *
+ * @param {PresetManagerState} state Manager state.
+ * @returns {Array<{name: string, value: string}>} Desired option order (placeholders first).
+ */
+function desiredItemsForState(state) {
+    const { placeholders, baseItems } = collectBaseState(state);
     const spec = resolveSpec(state.apiId);
     const ordered = spec.field === SORT_FIELDS.DEFAULT
         ? baseItems.slice()
         : computePresetOrderByField(baseItems, spec.field, spec.direction, name => getSortStats(state.apiId, name));
-
-    return [...placeholders.map(entry => ({ name: entry.name, value: entry.value })), ...ordered];
+    return [...placeholders, ...ordered];
 }
 
 /**
- * Applies the desired order to one manager (no-op when already correct).
+ * Computes the grouped DOM plan for a manager: placeholders stay flat, series
+ * groups become native `<optgroup>` entities, ungrouped/singleton presets stay
+ * flat options. Groups and singles are ordered by the current field/direction
+ * using aggregate member stats; members are ordered by natural version order.
  *
  * @param {PresetManagerState} state Manager state.
- * @returns {boolean} Whether the DOM was reordered.
+ * @returns {{placeholders: Array<{name: string, value: string}>, entities: Array<object>}} Grouped plan.
+ */
+function groupedPlanForState(state) {
+    const rt = runtime;
+    const { placeholders, baseItems } = collectBaseState(state);
+    const spec = resolveSpec(state.apiId);
+    const overrides = rt ? (rt.settings.grouping.overrides[state.apiId] ?? {}) : {};
+    const mode = rt ? rt.settings.grouping.mode : DEFAULT_GROUPING_MODE;
+    const entities = groupPresetItems(baseItems, { apiId: state.apiId, overrides, mode });
+    const orderedEntities = computeGroupedEntityOrder(
+        entities,
+        spec.field,
+        spec.direction,
+        name => getSortStats(state.apiId, name),
+        aggregateGroupStats,
+    );
+    return { placeholders, entities: orderedEntities };
+}
+
+/**
+ * Applies the desired order/grouping to one manager (no-op when already correct).
+ *
+ * @param {PresetManagerState} state Manager state.
+ * @returns {boolean} Whether the DOM was changed.
  */
 function applyState(state) {
-    const changed = applyOptionOrder(state.select, desiredItemsForState(state));
+    const rt = runtime;
+    const groupingEnabled = !!rt && rt.settings.grouping.enabled;
+    const changed = groupingEnabled
+        ? applyGroupedOptionOrder(state.select, groupedPlanForState(state))
+        : applyOptionOrder(state.select, desiredItemsForState(state));
     // Discard mutation records produced by our own reorder.
     state.observer?.takeRecords?.();
     return changed;
@@ -1242,10 +1338,10 @@ function syncControls() {
 }
 
 /**
- * Handles a settings panel change (toggles / default field / direction).
- * The panel has already mutated the live settings object.
+ * Handles a settings panel change (toggles / default field / direction /
+ * grouping switch). The panel has already mutated the live settings object.
  *
- * @param {{enabled?: boolean, applyToAll?: boolean, field?: string, direction?: string}} patch Changed fields.
+ * @param {{enabled?: boolean, applyToAll?: boolean, field?: string, direction?: string, groupingEnabled?: boolean, groupingMode?: string}} patch Changed fields.
  * @returns {void}
  */
 function onSettingsPanelChange(patch) {
@@ -1260,6 +1356,141 @@ function onSettingsPanelChange(patch) {
     if (patch && patch.enabled === false) {
         showToast('info', t('toast.disabled'));
     }
+}
+
+/* -------------------------------------------------------------------------- */
+/* Grouping manager (settings panel data layer)                                */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Builds the data used by the settings-panel group manager: per-API presets with
+ * their manual override and auto-detected group suggestion.
+ *
+ * @returns {{enabled: boolean, mode: string, apis: Array<object>, summary: {groups: number, presets: number, grouped: number, manual: number}}} Manager data.
+ */
+function buildGroupingManagerData() {
+    const rt = runtime;
+    if (!rt) {
+        return {
+            enabled: false,
+            mode: DEFAULT_GROUPING_MODE,
+            apis: [],
+            summary: { groups: 0, presets: 0, grouped: 0, manual: 0 },
+        };
+    }
+    const mode = normalizeGroupingMode(rt.settings.grouping.mode);
+    const summary = { groups: 0, presets: 0, grouped: 0, manual: 0 };
+    const apis = [];
+    for (const state of rt.managers.values()) {
+        const { baseItems } = collectBaseState(state);
+        const overrides = rt.settings.grouping.overrides[state.apiId] ?? {};
+        /** @type {Map<string, string>} */
+        const autoGroupByPreset = new Map();
+        try {
+            const autoEntities = groupPresetItems(baseItems, { apiId: state.apiId, overrides: {}, mode });
+            for (const entity of autoEntities) {
+                if (entity.type !== 'group') {
+                    continue;
+                }
+                for (const member of entity.members) {
+                    autoGroupByPreset.set(member.name, entity.baseLabel);
+                }
+            }
+        } catch (error) {
+            console.warn(`${LOG_PREFIX} auto grouping preview failed for ${state.apiId}.`, error);
+        }
+        let groupCount = 0;
+        let groupedCount = 0;
+        try {
+            const entities = groupPresetItems(baseItems, { apiId: state.apiId, overrides, mode });
+            for (const entity of entities) {
+                if (entity.type === 'group') {
+                    groupCount += 1;
+                    groupedCount += entity.members.length;
+                }
+            }
+        } catch (error) {
+            console.warn(`${LOG_PREFIX} grouping preview failed for ${state.apiId}.`, error);
+        }
+        const presets = baseItems.map(item => ({
+            name: item.name,
+            autoGroup: autoGroupByPreset.get(item.name) ?? '',
+            override: typeof overrides[item.name] === 'string' ? overrides[item.name] : '',
+        }));
+        summary.groups += groupCount;
+        summary.presets += presets.length;
+        summary.grouped += groupedCount;
+        summary.manual += Object.keys(overrides).length;
+        apis.push({
+            apiId: state.apiId,
+            labelKey: `api.${state.apiId}`,
+            presets,
+            groupCount,
+            presetCount: presets.length,
+        });
+    }
+    return { enabled: rt.settings.grouping.enabled, mode, apis, summary };
+}
+
+/**
+ * Replaces the manual grouping overrides (from the group manager) and re-applies
+ * the grouped DOM. Empty group names are ignored (auto), `__ungrouped__` keeps a
+ * preset flat.
+ *
+ * @param {Record<string, Record<string, string>>} overridesByApi Overrides keyed by API id.
+ * @returns {void}
+ */
+function applyGroupingOverrides(overridesByApi) {
+    const rt = runtime;
+    if (!rt) {
+        return;
+    }
+    const source = overridesByApi && typeof overridesByApi === 'object' ? overridesByApi : {};
+    /** @type {Record<string, Record<string, string>>} */
+    const clean = {};
+    for (const [rawApiId, rawMap] of Object.entries(source)) {
+        const apiId = normalizePresetApiId(String(rawApiId));
+        if (!isSupportedPresetApi(apiId) || !rawMap || typeof rawMap !== 'object' || Array.isArray(rawMap)) {
+            continue;
+        }
+        /** @type {Record<string, string>} */
+        const cleanMap = {};
+        for (const [presetName, groupName] of Object.entries(rawMap)) {
+            if (typeof presetName !== 'string' || presetName === '' || typeof groupName !== 'string') {
+                continue;
+            }
+            const value = groupName.trim();
+            if (value === '') {
+                continue; // empty = use auto-detection
+            }
+            cleanMap[presetName] = value === GROUPING_UNGROUPED ? GROUPING_UNGROUPED : value;
+        }
+        if (Object.keys(cleanMap).length > 0) {
+            clean[apiId] = cleanMap;
+        }
+    }
+    rt.settings.grouping.overrides = clean;
+    applyAllStates();
+    updateAllTooltips();
+    updateSettingsUi();
+    persistNow();
+}
+
+/**
+ * Resets all manual grouping overrides and re-applies auto grouping.
+ *
+ * @returns {void}
+ */
+function resetGroupingOverrides() {
+    const rt = runtime;
+    if (!rt) {
+        return;
+    }
+    rt.settings.grouping.overrides = {};
+    applyAllStates();
+    updateAllTooltips();
+    updateSettingsUi();
+    persistNow();
 }
 
 /* -------------------------------------------------------------------------- */
@@ -1321,6 +1552,9 @@ function mountPanel() {
         onResetUsage: resetUsageStats,
         confirmReset: confirmResetUsage,
         getDiagnostics: buildUiDiagnostics,
+        getGroupingManagerData: buildGroupingManagerData,
+        onSaveGroupingOverrides: applyGroupingOverrides,
+        onResetGroupingOverrides: resetGroupingOverrides,
     });
 }
 
@@ -1334,6 +1568,12 @@ function buildUiDiagnostics() {
     }
     const fs = rt.hostFs.getStatus();
     const summary = rt.store.getSummary();
+    let groupingSummary = { groups: 0, presets: 0, grouped: 0, manual: 0 };
+    try {
+        groupingSummary = buildGroupingManagerData().summary;
+    } catch {
+        // Diagnostics must never break the panel.
+    }
     return {
         fsAvailable: fs.available && fs.enabled,
         fsInitialized: fs.initialized,
@@ -1344,6 +1584,12 @@ function buildUiDiagnostics() {
         known: summary.known,
         used: summary.used,
         importTimes: summary.importTimes,
+        groupingEnabled: rt.settings.grouping.enabled,
+        groupingMode: rt.settings.grouping.mode,
+        groupCount: groupingSummary.groups,
+        groupingPresetCount: groupingSummary.presets,
+        groupedPresetCount: groupingSummary.grouped,
+        groupingOverrideCount: groupingSummary.manual,
     };
 }
 
@@ -1650,6 +1896,12 @@ function buildProbeStatus() {
     }
     const defaultSpec = rt.settings.default;
     const defaultMode = fieldDirectionToMode(defaultSpec.field, defaultSpec.direction);
+    let groupingSummary = { groups: 0, presets: 0, grouped: 0, manual: 0 };
+    try {
+        groupingSummary = buildGroupingManagerData().summary;
+    } catch {
+        // Diagnostics must never break the probe.
+    }
     return {
         version: VERSION,
         initialized: true,
@@ -1658,6 +1910,16 @@ function buildProbeStatus() {
         default: { field: defaultSpec.field, direction: defaultSpec.direction },
         perApi: perApiSpecs,
         fields: [...FIELD_ORDER],
+        // v1.2.0 grouping.
+        grouping: {
+            enabled: rt.settings.grouping.enabled,
+            mode: rt.settings.grouping.mode,
+            modes: [...GROUPING_MODE_ORDER],
+            groups: groupingSummary.groups,
+            groupedPresets: groupingSummary.grouped,
+            presets: groupingSummary.presets,
+            overrides: groupingSummary.manual,
+        },
         // Backward-compatible v1 fields kept for older probes / tooling.
         mode: defaultMode,
         defaultMode,

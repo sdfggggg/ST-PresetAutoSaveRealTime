@@ -1,26 +1,40 @@
 <!--
-  Settings panel skeleton for the `preset-sorter` extension (v1.1.0).
+  Settings panel skeleton for the `preset-sorter` extension (v1.2.0).
 
   All user-visible text is injected by `src/settings-ui.js` from the extension's
   built-in i18n dictionary, so this template is language-neutral. Only the
   element ids/classes are part of the contract between the template and the
   settings controller:
 
-  #preset_sorter_settings            root panel (appended to #extensions_settings2)
-  #preset_sorter_title               drawer title
-  #preset_sorter_enabled             enable toggle
-  #preset_sorter_enabled_label       enable toggle label
-  #preset_sorter_field               default sort field <select>
-  #preset_sorter_field_label         default sort field label
-  #preset_sorter_direction           independent "倒序 / Descending" checkbox
-  #preset_sorter_direction_label     direction checkbox label
-  #preset_sorter_effective_hint      localized "field · direction" hint
-  #preset_sorter_apply_all           "apply to all preset managers" toggle
-  #preset_sorter_apply_all_label     "apply to all" label
-  #preset_sorter_refresh             refresh import times button
-  #preset_sorter_reset_usage         reset usage stats button
-  #preset_sorter_diagnostics         diagnostics lines container
-  #preset_sorter_hint                small hint line
+  #preset_sorter_settings              root panel (appended to #extensions_settings2)
+  #preset_sorter_title                 drawer title
+  #preset_sorter_enabled               enable toggle
+  #preset_sorter_enabled_label         enable toggle label
+  #preset_sorter_field                 default sort field <select>
+  #preset_sorter_field_label           default sort field label
+  #preset_sorter_direction             independent "倒序 / Descending" checkbox
+  #preset_sorter_direction_label       direction checkbox label
+  #preset_sorter_effective_hint        localized "field · direction" hint
+  #preset_sorter_apply_all             "apply to all preset managers" toggle
+  #preset_sorter_apply_all_label       "apply to all" label
+  #preset_sorter_grouping_enabled      grouping enable toggle
+  #preset_sorter_grouping_enabled_label grouping label
+  #preset_sorter_grouping_mode         grouping auto-detect mode <select>
+  #preset_sorter_grouping_mode_label   grouping mode label
+  #preset_sorter_grouping_hint         grouping hint line
+  #preset_sorter_manage_groups         "manage groups" button
+  #preset_sorter_grouping_counts       grouping counts line
+  #preset_sorter_group_manager         collapsible group manager (<details>)
+  #preset_sorter_group_manager_title   group manager summary
+  #preset_sorter_group_search          preset search input
+  #preset_sorter_group_manager_body    per-API preset rows container
+  #preset_sorter_group_save            save groups button
+  #preset_sorter_group_reset           reset-to-auto button
+  #preset_sorter_group_status          group manager status line
+  #preset_sorter_refresh               refresh import times button
+  #preset_sorter_reset_usage           reset usage stats button
+  #preset_sorter_diagnostics           diagnostics lines container
+  #preset_sorter_hint                  small hint line
 -->
 <div id="preset_sorter_settings" class="preset-sorter-settings">
     <div class="inline-drawer">
@@ -50,6 +64,36 @@
                 <input id="preset_sorter_apply_all" type="checkbox">
                 <span id="preset_sorter_apply_all_label">Apply to all preset managers</span>
             </label>
+
+            <div class="preset-sorter-grouping-section">
+                <label class="checkbox_label preset-sorter-row">
+                    <input id="preset_sorter_grouping_enabled" type="checkbox">
+                    <span id="preset_sorter_grouping_enabled_label">Enable preset grouping</span>
+                </label>
+                <div class="preset-sorter-row">
+                    <label id="preset_sorter_grouping_mode_label" for="preset_sorter_grouping_mode">Auto-detect mode</label>
+                    <select id="preset_sorter_grouping_mode" class="text_pole preset-sorter-grouping-mode-select"></select>
+                </div>
+                <small id="preset_sorter_grouping_hint" class="preset-sorter-hint"></small>
+                <div class="preset-sorter-row preset-sorter-grouping-actions">
+                    <button id="preset_sorter_manage_groups" class="menu_button" type="button">Manage groups…</button>
+                    <span id="preset_sorter_grouping_counts" class="preset-sorter-grouping-counts"></span>
+                </div>
+
+                <details id="preset_sorter_group_manager" class="preset-sorter-group-manager">
+                    <summary id="preset_sorter_group_manager_title">Group manager</summary>
+                    <small id="preset_sorter_group_manager_hint" class="preset-sorter-hint"></small>
+                    <div class="preset-sorter-row">
+                        <input id="preset_sorter_group_search" class="text_pole preset-sorter-group-search" type="search">
+                    </div>
+                    <div id="preset_sorter_group_manager_body" class="preset-sorter-group-manager-body"></div>
+                    <div class="preset-sorter-row preset-sorter-actions">
+                        <button id="preset_sorter_group_save" class="menu_button" type="button">Save groups</button>
+                        <button id="preset_sorter_group_reset" class="menu_button" type="button">Reset to auto</button>
+                    </div>
+                    <div id="preset_sorter_group_status" class="preset-sorter-hint preset-sorter-group-status"></div>
+                </details>
+            </div>
 
             <div class="preset-sorter-row preset-sorter-actions">
                 <button id="preset_sorter_refresh" class="menu_button" type="button">Refresh import times</button>

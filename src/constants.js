@@ -179,8 +179,38 @@ export const MAX_STATS_PER_API = 600;
 /** Version of the persisted extension **stats** payload. @type {number} */
 export const STORAGE_VERSION = 1;
 
-/** Version of the persisted extension **settings** payload (field + direction shape). @type {number} */
+/** Version of the persisted extension **settings** payload (field + direction + grouping shape). @type {number} */
 export const SETTINGS_VERSION = 2;
 
 /** Extension version, mirrored in `manifest.json`. @type {string} */
-export const EXTENSION_VERSION = '1.1.0';
+export const EXTENSION_VERSION = '1.2.0';
+
+/**
+ * Preset grouping modes (v1.2.0 native `<optgroup>` series grouping).
+ * - `smart`: version-suffix parsing **plus** a conservative "prefix before the
+ *   first digit" heuristic (auto groups need at least 2 members).
+ * - `strict`: version-suffix parsing only.
+ * @type {Readonly<{SMART: 'smart', STRICT: 'strict'}>}
+ */
+export const GROUPING_MODES = Object.freeze({
+    SMART: 'smart',
+    STRICT: 'strict',
+});
+
+/** UI display order of the grouping modes. @type {ReadonlyArray<string>} */
+export const GROUPING_MODE_ORDER = Object.freeze([
+    GROUPING_MODES.SMART,
+    GROUPING_MODES.STRICT,
+]);
+
+/** Default grouping mode. @type {string} */
+export const DEFAULT_GROUPING_MODE = GROUPING_MODES.SMART;
+
+/** Override sentinel that keeps a preset out of every group (flat option). @type {string} */
+export const GROUPING_UNGROUPED = '__ungrouped__';
+
+/** Minimum number of members required for an automatic (non-manual) group. @type {number} */
+export const MIN_AUTO_GROUP_SIZE = 2;
+
+/** Minimum display length of the "prefix before first digit" smart heuristic. @type {number} */
+export const MIN_PREFIX_GROUP_LENGTH = 2;

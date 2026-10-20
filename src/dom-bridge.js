@@ -98,7 +98,53 @@ function readOptionValue(option) {
 }
 
 /**
- * Returns the option elements of a select in DOM order.
+ * Reads the direct child nodes of a DOM node (real DOM or test double).
+ *
+ * @param {any} node Parent node.
+ * @returns {any[]} Child nodes.
+ */
+function readChildNodes(node) {
+    if (!node) {
+        return [];
+    }
+    const collection = node.childNodes ?? node.children ?? null;
+    if (!collection || typeof collection.length !== 'number') {
+        return [];
+    }
+    const nodes = [];
+    for (let index = 0; index < collection.length; index += 1) {
+        nodes.push(collection[index]);
+    }
+    return nodes;
+}
+
+/**
+ * Recursively collects option elements of a select, including options nested in
+ * `<optgroup>` elements (v1.2.0 grouping keeps all option nodes, just nested).
+ *
+ * @param {any} node Parent node.
+ * @param {any[]} result Accumulator.
+ * @returns {void}
+ */
+function collectOptionElementsRecursive(node, result) {
+    for (const child of readChildNodes(node)) {
+        if (isOptionLike(child)) {
+            result.push(child);
+            continue;
+        }
+        const tagName = typeof child.tagName === 'string' ? child.tagName.toUpperCase() : '';
+        if (tagName === 'OPTGROUP') {
+            collectOptionElementsRecursive(child, result);
+        }
+    }
+}
+
+/**
+ * Returns the option elements of a select in flat DOM order.
+ *
+ * Uses the native live `select.options` collection when it is populated (real
+ * browser DOM; also flattens optgroups), otherwise walks child nodes recursively
+ * so DOM doubles and transient states still resolve correctly.
  *
  * @param {HTMLSelectElement|any} select Select element.
  * @returns {any[]} Option elements.
@@ -107,18 +153,32 @@ function readOptionElements(select) {
     if (!select) {
         return [];
     }
-    const collection = select.options ?? select.children ?? null;
-    if (!collection || typeof collection.length !== 'number') {
-        return [];
-    }
-    const options = [];
-    for (let index = 0; index < collection.length; index += 1) {
-        const option = collection[index];
-        if (isOptionLike(option)) {
-            options.push(option);
+    /** @type {any[]} */
+    const nativeOptions = [];
+    const native = select.options;
+    if (native && typeof native.length === 'number') {
+        for (let index = 0; index < native.length; index += 1) {
+            const option = native[index];
+            if (isOptionLike(option)) {
+                nativeOptions.push(option);
+            }
         }
     }
-    return options;
+    /** @type {any[]} */
+    const recursiveOptions = [];
+    collectOptionElementsRecursive(select, recursiveOptions);
+    if (nativeOptions.length === 0) {
+        return recursiveOptions;
+    }
+    // Real browser DOM: `select.options` is already the complete flat list.
+    // Some DOM doubles only expose direct options there; merge the nested ones.
+    const seen = new Set(nativeOptions);
+    for (const option of recursiveOptions) {
+        if (!seen.has(option)) {
+            nativeOptions.push(option);
+        }
+    }
+    return nativeOptions;
 }
 
 /**
@@ -384,8 +444,9 @@ export function applyOptionOrder(select, items) {
         }
     }
 
-    // No-op check before touching the DOM.
-    let identical = ordered.length === entries.length;
+    // No-op check before touching the DOM. A grouped DOM structure is never a
+    // no-op for flat mode: switching grouping off must flatten it again.
+    let identical = !hasOptgroups(select) && ordered.length === entries.length;
     if (identical) {
         for (let index = 0; index < ordered.length; index += 1) {
             if (String(ordered[index].value) !== entries[index].value) {
@@ -408,31 +469,286 @@ export function applyOptionOrder(select, items) {
         for (const option of ordered) {
             fragment.appendChild(option);
         }
+        // Remove stale nodes (e.g. empty <optgroup> shells left by v1.2 grouping)
+        // before committing the flat structure in one append.
+        while (select.firstChild) {
+            select.removeChild(select.firstChild);
+        }
         select.appendChild(fragment);
     } else if (typeof select.appendChild === 'function') {
         for (const option of ordered) {
             select.appendChild(option);
         }
-    }
-
-    // Restore the selected option/value without firing events.
-    if (selectedValueBefore !== null && selectedValueBefore !== '') {
-        const match = readOptionEntries(select).find(entry => entry.value === selectedValueBefore);
-        if (match) {
-            try {
-                match.option.selected = true;
-            } catch {
-                // Ignore non-writable test doubles.
-            }
-            if (String(select.value) !== selectedValueBefore) {
-                try {
-                    select.value = selectedValueBefore;
-                } catch {
-                    // Ignore non-writable test doubles.
-                }
+        for (const child of readChildNodes(select)) {
+            if (isOptgroupNode(child)) {
+                select.removeChild(child);
             }
         }
     }
+
+    // Restore the selected option/value without firing events.
+    restoreSelectedValue(select, selectedValueBefore);
+    return true;
+}
+
+/**
+ * @param {any} node Candidate node.
+ * @returns {boolean} Whether the node is an `<optgroup>` element.
+ */
+function isOptgroupNode(node) {
+    if (!node) {
+        return false;
+    }
+    const tagName = typeof node.tagName === 'string' ? node.tagName.toUpperCase() : '';
+    return tagName === 'OPTGROUP';
+}
+
+/**
+ * @param {any} node Parent node.
+ * @returns {boolean} Whether any direct child is an `<optgroup>`.
+ */
+function hasOptgroups(node) {
+    return readChildNodes(node).some(child => isOptgroupNode(child));
+}
+
+/**
+ * @param {any} groupNode `<optgroup>` element.
+ * @returns {string} Group label.
+ */
+function readGroupLabel(groupNode) {
+    if (!groupNode) {
+        return '';
+    }
+    try {
+        const attribute = typeof groupNode.getAttribute === 'function' ? groupNode.getAttribute('label') : null;
+        if (typeof attribute === 'string' && attribute !== '') {
+            return attribute;
+        }
+    } catch {
+        // Fall through to the property.
+    }
+    return groupNode.label === undefined || groupNode.label === null ? '' : String(groupNode.label);
+}
+
+/**
+ * Finds the nearest `<optgroup>` ancestor of an option (or `null`).
+ *
+ * @param {any} option Option element.
+ * @returns {any|null} Owning optgroup.
+ */
+function getOptionGroupNode(option) {
+    let node = getParentElement(option);
+    for (let depth = 0; node && depth < 6; depth += 1) {
+        if (isOptgroupNode(node)) {
+            return node;
+        }
+        const tagName = typeof node.tagName === 'string' ? node.tagName.toUpperCase() : '';
+        if (tagName === 'SELECT' || tagName === 'BODY' || tagName === 'HTML' || node.nodeType === 9) {
+            return null;
+        }
+        node = getParentElement(node);
+    }
+    return null;
+}
+
+/**
+ * Restores the selected option/value of a select without firing events.
+ *
+ * @param {any} select Select element.
+ * @param {string|null} selectedValue Value captured before the DOM rewrite.
+ * @returns {void}
+ */
+function restoreSelectedValue(select, selectedValue) {
+    if (selectedValue === null || selectedValue === '') {
+        return;
+    }
+    const match = readOptionEntries(select).find(entry => entry.value === selectedValue);
+    if (!match) {
+        return;
+    }
+    try {
+        match.option.selected = true;
+    } catch {
+        // Ignore non-writable test doubles.
+    }
+    if (String(select.value) !== selectedValue) {
+        try {
+            select.value = selectedValue;
+        } catch {
+            // Ignore non-writable test doubles.
+        }
+    }
+}
+
+/**
+ * Builds a structural signature of the current grouped DOM: optgroup tokens in
+ * document order followed by flat option tokens (grouping-aware no-op check).
+ *
+ * @param {any} select Select element.
+ * @returns {string} Structure signature.
+ */
+function currentGroupedStructureSignature(select) {
+    const tokens = [];
+    for (const child of readChildNodes(select)) {
+        if (!isOptgroupNode(child)) {
+            continue;
+        }
+        const memberValues = readChildNodes(child)
+            .filter(member => isOptionLike(member))
+            .map(member => readOptionValue(member));
+        tokens.push(`g:${readGroupLabel(child)}[${memberValues.join('\u001f')}]`);
+    }
+    for (const entry of readOptionEntries(select)) {
+        if (!getOptionGroupNode(entry.option)) {
+            tokens.push(`o:${entry.value}`);
+        }
+    }
+    return tokens.join('\u001e');
+}
+
+/**
+ * Signature of the desired grouped structure (must match
+ * {@link currentGroupedStructureSignature} once applied).
+ *
+ * @param {Array<{kind: 'option'|'group', option?: any, label?: string, members?: any[]}>} desired Desired structure.
+ * @returns {string} Structure signature.
+ */
+function desiredGroupedStructureSignature(desired) {
+    const groupTokens = [];
+    const optionTokens = [];
+    for (const item of desired) {
+        if (item.kind === 'group') {
+            groupTokens.push(`g:${item.label}[${(item.members ?? []).map(readOptionValue).join('\u001f')}]`);
+        } else {
+            optionTokens.push(`o:${readOptionValue(item.option)}`);
+        }
+    }
+    return [...groupTokens, ...optionTokens].join('\u001e');
+}
+
+/**
+ * Applies a v1.2.0 grouped plan to a preset select: options are moved into
+ * native `<optgroup label="...">` elements for groups and stay direct `<option>`
+ * children for singles/placeholders.
+ *
+ * Invariants: option nodes are moved only (never recreated/edited/removed),
+ * values/text/order-inside-group are untouched, the selected option is
+ * preserved, no `change` event is dispatched, and re-applying an identical plan
+ * is a structural no-op.
+ *
+ * @param {HTMLSelectElement|any} select Preset select element.
+ * @param {{placeholders?: Array<{value: string|number}>, entities?: Array<object>}} plan Grouped plan from the controller.
+ * @returns {boolean} `true` when the DOM was restructured, `false` for a no-op.
+ */
+export function applyGroupedOptionOrder(select, plan) {
+    if (!select || !plan || !Array.isArray(plan.entities)) {
+        return false;
+    }
+    const entries = readOptionEntries(select);
+    if (entries.length === 0) {
+        return false;
+    }
+
+    /** @type {Map<string, any[]>} */
+    const queues = new Map();
+    for (const entry of entries) {
+        if (!queues.has(entry.value)) {
+            queues.set(entry.value, []);
+        }
+        queues.get(entry.value).push(entry.option);
+    }
+    /**
+     * @param {unknown} value Option value.
+     * @returns {any|null} Next option node for that value.
+     */
+    const takeOption = value => {
+        const key = value === undefined || value === null ? '' : String(value);
+        const queue = queues.get(key);
+        return queue && queue.length > 0 ? queue.shift() : null;
+    };
+
+    /** @type {Array<{kind: 'option'|'group', option?: any, label?: string, members?: any[]}>} */
+    const desired = [];
+    const consumed = new Set();
+    for (const placeholder of Array.isArray(plan.placeholders) ? plan.placeholders : []) {
+        const option = takeOption(placeholder ? placeholder.value : '');
+        if (option) {
+            consumed.add(option);
+            desired.push({ kind: 'option', option });
+        }
+    }
+    for (const entity of plan.entities) {
+        if (entity && entity.type === 'group') {
+            const members = [];
+            for (const member of Array.isArray(entity.members) ? entity.members : []) {
+                const value = member && typeof member === 'object' && 'item' in member ? member.item.value : member?.value;
+                const option = takeOption(value);
+                if (option) {
+                    consumed.add(option);
+                    members.push(option);
+                }
+            }
+            if (members.length > 0) {
+                desired.push({
+                    kind: 'group',
+                    label: entity.label === undefined ? String(entity.baseLabel ?? '') : String(entity.label),
+                    members,
+                });
+            }
+            continue;
+        }
+        const value = entity && typeof entity === 'object' && 'item' in entity ? entity.item.value : entity?.value;
+        const option = takeOption(value);
+        if (option) {
+            consumed.add(option);
+            desired.push({ kind: 'option', option });
+        }
+    }
+    // Never drop option nodes: options missing from the plan stay as flat singles.
+    for (const entry of entries) {
+        if (!consumed.has(entry.option)) {
+            desired.push({ kind: 'option', option: entry.option });
+        }
+    }
+
+    if (currentGroupedStructureSignature(select) === desiredGroupedStructureSignature(desired)) {
+        return false;
+    }
+
+    const selectedValueBefore = select.value === undefined || select.value === null ? null : String(select.value);
+    const documentRef = getDocument();
+    if (!documentRef || typeof documentRef.createElement !== 'function') {
+        return false;
+    }
+    const fragment = typeof documentRef.createDocumentFragment === 'function'
+        ? documentRef.createDocumentFragment()
+        : null;
+    if (!fragment || typeof fragment.appendChild !== 'function') {
+        return false;
+    }
+
+    for (const item of desired) {
+        if (item.kind === 'group') {
+            const group = documentRef.createElement('optgroup');
+            try {
+                group.setAttribute('label', item.label ?? '');
+            } catch {
+                // Ignore non-writable test doubles.
+            }
+            for (const option of item.members ?? []) {
+                group.appendChild(option);
+            }
+            fragment.appendChild(group);
+        } else {
+            fragment.appendChild(item.option);
+        }
+    }
+
+    while (select.firstChild) {
+        select.removeChild(select.firstChild);
+    }
+    select.appendChild(fragment);
+    restoreSelectedValue(select, selectedValueBefore);
     return true;
 }
 

@@ -21,6 +21,7 @@ import {
     SORT_FIELDS,
     SORT_MODES,
 } from './constants.js';
+import { compareVersions, parsePresetName } from './grouping-engine.js';
 
 /**
  * A single preset dropdown option snapshot.
@@ -244,6 +245,80 @@ export function computePresetOrderByField(items, field, direction, getStats) {
 
     decorated.sort(comparator);
     return decorated.map(entry => entry.item);
+}
+
+/**
+ * Orders grouped entities (v1.2.0 `<optgroup>` plan) for DOM rendering.
+ *
+ * Groups and flat singles are ordered together with the same field + direction
+ * semantics as {@link computePresetOrderByField}. A group participates with an
+ * **aggregated** stats object (see `grouping-engine.aggregateGroupStats`), and
+ * its members are always ordered by natural version order (ascending; unknown
+ * versions last, stable).
+ *
+ * @param {Array<object>} entities Grouped entities from `grouping-engine.groupPresetItems`.
+ * @param {string} field Sort field (`default` | `import` | `usage` | `recent`).
+ * @param {string} direction Sort direction (`asc` | `desc`).
+ * @param {(name: string) => PresetStats|undefined} getStats Stats accessor.
+ * @param {(members: Array<{name: string}>, getStats: Function, field: string, direction: string) => object} aggregate Group stats aggregator.
+ * @returns {Array<object>} Entities in desired order (new array; groups get sorted members).
+ */
+export function computeGroupedEntityOrder(entities, field, direction, getStats, aggregate) {
+    const list = Array.isArray(entities) ? entities : [];
+    const normalizedField = normalizeField(field);
+    const normalizedDirection = normalizeDirection(direction);
+    const getStatsForName = typeof getStats === 'function' ? getStats : () => undefined;
+    const aggregateFn = typeof aggregate === 'function' ? aggregate : null;
+
+    const prepared = list.map((entity, originalIndex) => {
+        if (entity && entity.type === 'group') {
+            const members = Array.isArray(entity.members) ? entity.members.slice() : [];
+            const originalMemberIndex = new Map(members.map((member, index) => [member, index]));
+            members.sort((memberA, memberB) => {
+                const versionDelta = compareVersions(
+                    parsePresetName(memberA ? memberA.name : '').version,
+                    parsePresetName(memberB ? memberB.name : '').version,
+                );
+                if (versionDelta !== 0) {
+                    return versionDelta;
+                }
+                return (originalMemberIndex.get(memberA) ?? 0) - (originalMemberIndex.get(memberB) ?? 0);
+            });
+            const stats = aggregateFn
+                ? aggregateFn(members, getStatsForName, normalizedField, normalizedDirection)
+                : undefined;
+            return { entity, originalIndex, stats, members };
+        }
+        const item = entity && entity.type === 'option' ? entity.item : null;
+        return {
+            entity,
+            originalIndex,
+            stats: item ? getStatsForName(item.name) : undefined,
+            members: null,
+        };
+    });
+
+    if (normalizedField === SORT_FIELDS.DEFAULT) {
+        return prepared.map(entry => withSortedMembers(entry));
+    }
+
+    const comparator = createComparator(normalizedField, normalizedDirection);
+    prepared.sort((a, b) => {
+        const result = comparator ? comparator(a, b) : 0;
+        return result !== 0 ? result : a.originalIndex - b.originalIndex;
+    });
+    return prepared.map(entry => withSortedMembers(entry));
+}
+
+/**
+ * @param {{entity: object, members: Array<object>|null}} entry Prepared entity entry.
+ * @returns {object} Entity with version-sorted members for groups.
+ */
+function withSortedMembers(entry) {
+    if (entry.entity && entry.entity.type === 'group') {
+        return { ...entry.entity, members: entry.members ?? entry.entity.members };
+    }
+    return entry.entity;
 }
 
 /**
