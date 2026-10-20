@@ -1,43 +1,146 @@
 /**
- * Styles for the `preset-sorter` extension.
+ * Styles for the `preset-sorter` extension (v1.1.0).
  *
  * Design goals:
- * - use SillyTavern theme variables (with fallbacks) so the UI matches any theme;
- * - stay compact and mobile-safe: no fixed widths, no horizontal overflow;
- * - only style extension-owned elements (`#preset_sorter_settings`,
- *   `.preset-sorter-sort-control`) and never restyle upstream preset selects.
+ * - match any SillyTavern theme through its CSS variables (with safe fallbacks);
+ * - compact "pill" control group next to the preset select (icon + field select
+ *   + independent 倒序 checkbox), no layout jump when injected;
+ * - mobile-safe: wraps, ≥32px touch targets, no fixed widths, no overflow;
+ * - style only extension-owned elements, never restyle upstream selects.
  */
 
 /* ---------------------------------------------------------------------------
- * Sort mode <select> injected next to each preset manager select
+ * Injected field + direction control group (sibling of the preset select)
  * ------------------------------------------------------------------------- */
 
-.preset-sorter-sort-control {
+.preset-sorter-control-group {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
     flex: 0 0 auto;
-    width: auto;
-    max-width: 12em;
-    min-width: 6em;
-    margin: 0 0 0 4px;
-    padding: 1px 4px;
-    font-size: 0.9em;
-    align-self: center;
+    box-sizing: border-box;
+    height: 28px;
+    max-width: 100%;
+    margin: 0 0 0 6px;
+    padding: 1px 6px;
+    border: 1px solid var(--SmartThemeBorderColor, rgba(140, 140, 140, 0.55));
+    border-radius: 999px;
+    background-color: var(--SmartThemeBlurTintColor, rgba(30, 30, 30, 0.55));
     color: var(--SmartThemeBodyColor, #dcdcdc);
-    border: 1px solid var(--SmartThemeBorderColor, #5c5c5c);
-    border-radius: 4px;
-    background-color: var(--SmartThemeBlurTintColor, rgba(35, 35, 35, 0.95));
+    font-size: 0.88em;
+    line-height: 1;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease, background-color 0.15s ease;
 }
 
-.preset-sorter-sort-control:focus-visible {
+.preset-sorter-control-group:hover {
+    border-color: var(--SmartThemeQuoteColor, #7aa2f7);
+}
+
+.preset-sorter-control-group:focus-within {
+    border-color: var(--SmartThemeQuoteColor, #7aa2f7);
+    box-shadow: 0 0 0 2px rgba(122, 162, 247, 0.28);
+}
+
+.preset-sorter-control-group[hidden] {
+    display: none !important;
+}
+
+.preset-sorter-sort-icon {
+    flex: 0 0 auto;
+    color: var(--SmartThemeQuoteColor, #9ecbff);
+    font-size: 0.82em;
+    opacity: 0.75;
+    pointer-events: none;
+}
+
+.preset-sorter-field-select {
+    flex: 0 1 auto;
+    width: auto;
+    max-width: 8.5em;
+    height: 22px;
+    min-height: 0;
+    margin: 0;
+    padding: 0 2px;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    font-size: 1em;
+    line-height: 1;
+    cursor: pointer;
+}
+
+.preset-sorter-field-select:focus-visible {
+    border-radius: 4px;
     outline: 2px solid var(--SmartThemeQuoteColor, #7aa2f7);
     outline-offset: 1px;
 }
 
-/* Keep the sort control usable on narrow/mobile layouts without stretching rows. */
+.preset-sorter-field-select option {
+    color: var(--SmartThemeBodyColor, #dcdcdc);
+    background-color: var(--SmartThemeBlurTintColor, #232323);
+}
+
+.preset-sorter-direction-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    flex: 0 0 auto;
+    margin: 0;
+    padding: 0 2px 0 5px;
+    border-left: 1px solid var(--SmartThemeBorderColor, rgba(140, 140, 140, 0.45));
+    font-size: 0.92em;
+    line-height: 1;
+    white-space: nowrap;
+    cursor: pointer;
+    user-select: none;
+}
+
+.preset-sorter-direction-checkbox {
+    width: 14px;
+    height: 14px;
+    margin: 0;
+    accent-color: var(--SmartThemeQuoteColor, #7aa2f7);
+    cursor: pointer;
+}
+
+.preset-sorter-direction-text {
+    pointer-events: none;
+}
+
+.preset-sorter-direction-label.is-disabled {
+    opacity: 0.45;
+    cursor: default;
+}
+
+.preset-sorter-direction-label.is-disabled .preset-sorter-direction-checkbox {
+    cursor: default;
+}
+
+/* Mobile: wrap gracefully, touch-friendly targets, never overflow the row. */
 @media (max-width: 480px) {
-    .preset-sorter-sort-control {
-        max-width: 38vw;
-        min-width: 0;
-        font-size: 0.85em;
+    .preset-sorter-control-group {
+        flex-wrap: wrap;
+        gap: 2px 6px;
+        height: auto;
+        min-height: 34px;
+        padding: 4px 8px;
+        margin-left: 4px;
+        border-radius: 12px;
+    }
+
+    .preset-sorter-field-select {
+        max-width: 40vw;
+        min-height: 26px;
+    }
+
+    .preset-sorter-direction-label {
+        min-height: 32px;
+        padding-left: 6px;
+    }
+
+    .preset-sorter-direction-checkbox {
+        width: 18px;
+        height: 18px;
     }
 }
 
@@ -58,10 +161,44 @@
     margin: 0;
 }
 
-#preset_sorter_settings .preset-sorter-mode-select {
-    flex: 1 1 8em;
-    min-width: 8em;
+#preset_sorter_settings .preset-sorter-sort-row {
+    align-items: center;
+    gap: 6px;
+}
+
+#preset_sorter_settings .preset-sorter-sort-row .preset-sorter-sort-icon {
+    font-size: 0.9em;
+}
+
+#preset_sorter_settings .preset-sorter-field-select {
+    flex: 0 1 10em;
+    width: auto;
+    min-width: 7em;
     max-width: 100%;
+    height: 2em;
+    padding: 0 4px;
+    border: 1px solid var(--SmartThemeBorderColor, rgba(140, 140, 140, 0.55));
+    border-radius: 4px;
+    background-color: var(--SmartThemeBlurTintColor, rgba(30, 30, 30, 0.55));
+    color: var(--SmartThemeBodyColor, #dcdcdc);
+}
+
+#preset_sorter_settings .preset-sorter-direction-row {
+    gap: 4px;
+}
+
+#preset_sorter_settings .preset-sorter-direction-checkbox {
+    width: 16px;
+    height: 16px;
+}
+
+#preset_sorter_settings .preset-sorter-direction-row.is-disabled {
+    opacity: 0.55;
+}
+
+#preset_sorter_settings .preset-sorter-effective-hint {
+    margin-top: 0;
+    opacity: 0.75;
 }
 
 #preset_sorter_settings .preset-sorter-actions {
@@ -112,6 +249,19 @@
 }
 
 @media (max-width: 480px) {
+    #preset_sorter_settings .preset-sorter-sort-row {
+        flex-wrap: wrap;
+    }
+
+    #preset_sorter_settings .preset-sorter-field-select {
+        flex: 1 1 9em;
+        min-height: 32px;
+    }
+
+    #preset_sorter_settings .preset-sorter-direction-row {
+        min-height: 32px;
+    }
+
     #preset_sorter_settings .preset-sorter-actions {
         flex-direction: column;
         align-items: stretch;
@@ -119,5 +269,6 @@
 
     #preset_sorter_settings .preset-sorter-actions .menu_button {
         width: 100%;
+        min-height: 32px;
     }
 }

@@ -15,12 +15,18 @@ export const EXTENSION_NAME = 'preset-sorter';
 export const DEFAULT_MODE = 'default';
 
 /**
- * Canonical identifiers for every supported sort mode.
+ * Canonical identifiers for every supported **legacy combined** sort mode
+ * (kept for backward compatibility with persisted v1 settings and tests).
+ * v1.1.0 stores a field + direction instead; see {@link SORT_FIELDS} and
+ * {@link SORT_DIRECTIONS}.
+ *
  * @type {Readonly<{
  *   DEFAULT: 'default',
  *   IMPORT_ASC: 'import-asc',
  *   IMPORT_DESC: 'import-desc',
+ *   USAGE_ASC: 'usage-asc',
  *   USAGE_DESC: 'usage-desc',
+ *   RECENT_ASC: 'recent-asc',
  *   RECENT_DESC: 'recent-desc',
  * }>}
  */
@@ -28,18 +34,64 @@ export const SORT_MODES = Object.freeze({
     DEFAULT: 'default',
     IMPORT_ASC: 'import-asc',
     IMPORT_DESC: 'import-desc',
+    USAGE_ASC: 'usage-asc',
     USAGE_DESC: 'usage-desc',
+    RECENT_ASC: 'recent-asc',
     RECENT_DESC: 'recent-desc',
 });
 
-/** UI display order of the sort modes. @type {ReadonlyArray<string>} */
+/** UI display order of the legacy sort modes (v1 compatibility only). @type {ReadonlyArray<string>} */
 export const MODE_ORDER = Object.freeze([
     SORT_MODES.DEFAULT,
     SORT_MODES.IMPORT_ASC,
     SORT_MODES.IMPORT_DESC,
+    SORT_MODES.USAGE_ASC,
     SORT_MODES.USAGE_DESC,
+    SORT_MODES.RECENT_ASC,
     SORT_MODES.RECENT_DESC,
 ]);
+
+/**
+ * Primary sort field identifiers used by the v1.1.0 field + direction UI.
+ * @type {Readonly<{
+ *   DEFAULT: 'default',
+ *   IMPORT: 'import',
+ *   USAGE: 'usage',
+ *   RECENT: 'recent',
+ * }>}
+ */
+export const SORT_FIELDS = Object.freeze({
+    DEFAULT: 'default',
+    IMPORT: 'import',
+    USAGE: 'usage',
+    RECENT: 'recent',
+});
+
+/** UI display order of the sort fields. @type {ReadonlyArray<string>} */
+export const FIELD_ORDER = Object.freeze([
+    SORT_FIELDS.DEFAULT,
+    SORT_FIELDS.IMPORT,
+    SORT_FIELDS.USAGE,
+    SORT_FIELDS.RECENT,
+]);
+
+/** Default sort field: keep the upstream SillyTavern order. @type {string} */
+export const DEFAULT_FIELD = SORT_FIELDS.DEFAULT;
+
+/**
+ * Sort direction identifiers: `asc` = 正序 (ascending), `desc` = 倒序 (descending).
+ * @type {Readonly<{ASC: 'asc', DESC: 'desc'}>}
+ */
+export const SORT_DIRECTIONS = Object.freeze({
+    ASC: 'asc',
+    DESC: 'desc',
+});
+
+/** Valid sort directions. @type {ReadonlyArray<string>} */
+export const DIRECTION_ORDER = Object.freeze([SORT_DIRECTIONS.ASC, SORT_DIRECTIONS.DESC]);
+
+/** Default direction (descending), matching the v1 default mode `default`. @type {string} */
+export const DEFAULT_DIRECTION = SORT_DIRECTIONS.DESC;
 
 /**
  * Descriptor for one SillyTavern preset manager.
@@ -124,5 +176,11 @@ export const FS_TIMEOUT_MS = 4000;
 /** Upper bound of tracked preset-stat entries per API (oldest least-recently-used are pruned). @type {number} */
 export const MAX_STATS_PER_API = 600;
 
-/** Version of the persisted extension settings payload. @type {number} */
+/** Version of the persisted extension **stats** payload. @type {number} */
 export const STORAGE_VERSION = 1;
+
+/** Version of the persisted extension **settings** payload (field + direction shape). @type {number} */
+export const SETTINGS_VERSION = 2;
+
+/** Extension version, mirrored in `manifest.json`. @type {string} */
+export const EXTENSION_VERSION = '1.1.0';

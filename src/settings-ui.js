@@ -1,5 +1,5 @@
 /**
- * Settings panel view layer.
+ * Settings panel view layer (v1.1.0 field + direction UI).
  *
  * The panel markup lives in `settings.html` (rendered by the controller through
  * `renderExtensionTemplateAsync`) and is deliberately language-neutral; this
@@ -7,13 +7,18 @@
  * settings object through the injected callbacks — persistence stays in the
  * controller.
  *
+ * The sort controls mirror the injected per-manager group: an independent
+ * **sort field** select plus an independent **倒序 / Descending** checkbox
+ * (checked = descending, unchecked = ascending). The checkbox is disabled and
+ * dimmed while the field is "默认排序" / "Default order".
+ *
  * Top-level code is side-effect free (no DOM access at import time).
  *
  * @module preset-sorter/settings-ui
  */
 
-import { DEFAULT_MODE, MODE_ORDER } from './constants.js';
-import { formatModeLabel, t } from './i18n.js';
+import { DEFAULT_DIRECTION, DEFAULT_FIELD, DIRECTION_ORDER, FIELD_ORDER } from './constants.js';
+import { formatFieldLabel, formatSortSpec, t } from './i18n.js';
 
 /**
  * @typedef {object} SettingsUiDiagnostics
@@ -31,7 +36,7 @@ import { formatModeLabel, t } from './i18n.js';
 /**
  * @typedef {object} SettingsUiOptions
  * @property {object} settings Live settings object (mutated by the UI).
- * @property {(patch: object) => void} [onChange] Called after a toggle/select change.
+ * @property {(patch: {field?: string, direction?: string, enabled?: boolean, applyToAll?: boolean}) => void} [onChange] Called after a control change.
  * @property {() => Promise<void>|void} [onRefresh] Refresh import times handler.
  * @property {() => Promise<void>|void} [onResetUsage] Reset usage handler.
  * @property {() => Promise<boolean>|boolean} [confirmReset] Confirmation for usage reset.
@@ -48,8 +53,40 @@ import { formatModeLabel, t } from './i18n.js';
  */
 
 /**
- * Mounts the settings panel: localizes labels, fills the sort-mode select and
- * binds the controls.
+ * @param {unknown} field Raw sort field.
+ * @returns {string} Normalised field.
+ */
+function normalizeField(field) {
+    return FIELD_ORDER.includes(field) ? field : DEFAULT_FIELD;
+}
+
+/**
+ * @param {unknown} direction Raw sort direction.
+ * @returns {string} Normalised direction.
+ */
+function normalizeDirection(direction) {
+    return DIRECTION_ORDER.includes(direction) ? direction : DEFAULT_DIRECTION;
+}
+
+/**
+ * Reads the current sort spec from a settings object, tolerating missing fields.
+ *
+ * @param {object} settings Settings object.
+ * @returns {{field: string, direction: string}} Normalised sort spec.
+ */
+function readDefaultSortSpec(settings) {
+    const source = settings && typeof settings.default === 'object' && settings.default !== null
+        ? settings.default
+        : {};
+    return {
+        field: normalizeField(source.field),
+        direction: normalizeDirection(source.direction),
+    };
+}
+
+/**
+ * Mounts the settings panel: localizes labels, fills the sort-field select,
+ * wires the independent direction checkbox and binds the controls.
  *
  * @param {SettingsUiOptions} options Panel options.
  * @returns {SettingsPanelHandle|null} Panel handle, or `null` when the markup is not present.
@@ -68,8 +105,11 @@ export function mountSettingsPanel(options) {
         title: byId('preset_sorter_title'),
         enabled: byId('preset_sorter_enabled'),
         enabledLabel: byId('preset_sorter_enabled_label'),
-        defaultMode: byId('preset_sorter_default_mode'),
-        defaultModeLabel: byId('preset_sorter_default_mode_label'),
+        field: byId('preset_sorter_field'),
+        fieldLabel: byId('preset_sorter_field_label'),
+        direction: byId('preset_sorter_direction'),
+        directionLabel: byId('preset_sorter_direction_label'),
+        effectiveHint: byId('preset_sorter_effective_hint'),
         applyAll: byId('preset_sorter_apply_all'),
         applyAllLabel: byId('preset_sorter_apply_all_label'),
         refresh: byId('preset_sorter_refresh'),
@@ -107,8 +147,9 @@ export function mountSettingsPanel(options) {
     setText(elements.title, 'panel.title');
     setText(elements.enabledLabel, 'panel.enabled');
     setTitle(elements.enabled, 'panel.enabledHint');
-    setText(elements.defaultModeLabel, 'panel.defaultMode');
-    setTitle(elements.defaultMode, 'panel.defaultModeHint');
+    setText(elements.fieldLabel, 'panel.defaultField');
+    setTitle(elements.field, 'panel.defaultFieldHint');
+    setText(elements.directionLabel, 'direction.desc');
     setText(elements.applyAllLabel, 'panel.applyAll');
     setTitle(elements.applyAll, 'panel.applyAllHint');
     setText(elements.refresh, 'panel.refresh');
@@ -116,21 +157,59 @@ export function mountSettingsPanel(options) {
     setText(elements.resetUsage, 'panel.resetUsage');
     setTitle(elements.resetUsage, 'panel.resetUsageHint');
     setText(elements.hint, 'panel.refreshHint');
+    setTitle(elements.direction, 'direction.title');
 
-    // Fill the sort-mode select once (it starts empty in settings.html).
-    if (elements.defaultMode) {
-        const existingOptions = elements.defaultMode.options;
+    // Fill the sort-field select once (it starts empty in settings.html).
+    if (elements.field) {
+        const existingOptions = elements.field.options;
         const optionCount = existingOptions && typeof existingOptions.length === 'number'
             ? existingOptions.length
             : 0;
         if (optionCount === 0) {
-            for (const mode of MODE_ORDER) {
+            for (const field of FIELD_ORDER) {
                 const option = documentRef.createElement('option');
-                option.value = mode;
-                option.textContent = formatModeLabel(mode);
-                elements.defaultMode.appendChild(option);
+                option.value = field;
+                option.textContent = formatFieldLabel(field);
+                elements.field.appendChild(option);
             }
         }
+    }
+
+    /**
+     * Enables/disables and dims the direction checkbox according to the field.
+     *
+     * @returns {void}
+     */
+    function syncDirectionAvailability() {
+        const isDefaultField = String(elements.field?.value ?? DEFAULT_FIELD) === DEFAULT_FIELD;
+        if (elements.direction) {
+            elements.direction.disabled = isDefaultField;
+        }
+        const directionRow = elements.directionLabel?.closest?.('.preset-sorter-direction-row')
+            ?? elements.directionLabel?.parentElement
+            ?? null;
+        if (directionRow && directionRow.classList && typeof directionRow.classList.toggle === 'function') {
+            directionRow.classList.toggle('is-disabled', isDefaultField);
+        }
+        if (elements.direction) {
+            elements.direction.title = isDefaultField ? t('direction.disabledHint') : t('direction.title');
+        }
+    }
+
+    /**
+     * Updates the localized effective-mode hint line.
+     *
+     * @returns {void}
+     */
+    function syncEffectiveHint() {
+        if (!elements.effectiveHint) {
+            return;
+        }
+        const spec = readDefaultSortSpec(settings);
+        const description = spec.field === DEFAULT_FIELD
+            ? formatFieldLabel(DEFAULT_FIELD)
+            : formatSortSpec(spec);
+        elements.effectiveHint.textContent = t('panel.effectiveHint', { mode: description });
     }
 
     /**
@@ -145,12 +224,15 @@ export function mountSettingsPanel(options) {
         if (elements.applyAll) {
             elements.applyAll.checked = !!settings.applyToAll;
         }
-        if (elements.defaultMode) {
-            const mode = MODE_ORDER.includes(settings.defaultMode) ? settings.defaultMode : DEFAULT_MODE;
-            if (String(elements.defaultMode.value) !== mode) {
-                elements.defaultMode.value = mode;
-            }
+        const spec = readDefaultSortSpec(settings);
+        if (elements.field && String(elements.field.value) !== spec.field) {
+            elements.field.value = spec.field;
         }
+        if (elements.direction) {
+            elements.direction.checked = spec.direction === 'desc';
+        }
+        syncDirectionAvailability();
+        syncEffectiveHint();
     }
 
     /**
@@ -226,8 +308,11 @@ export function mountSettingsPanel(options) {
      * @returns {void}
      */
     function syncEnabledState(enabled) {
-        if (elements.defaultMode) {
-            elements.defaultMode.disabled = !enabled;
+        if (elements.field) {
+            elements.field.disabled = !enabled;
+        }
+        if (elements.direction) {
+            elements.direction.disabled = !enabled || readDefaultSortSpec(settings).field === DEFAULT_FIELD;
         }
         if (elements.applyAll) {
             elements.applyAll.disabled = !enabled;
@@ -239,12 +324,20 @@ export function mountSettingsPanel(options) {
         syncEnabledState(settings.enabled);
         options.onChange?.({ enabled: settings.enabled });
     };
-    const onModeChange = () => {
-        const value = String(elements.defaultMode?.value ?? '');
-        if (MODE_ORDER.includes(value)) {
-            settings.defaultMode = value;
-            options.onChange?.({ defaultMode: value });
-        }
+    const onFieldChange = () => {
+        const field = normalizeField(String(elements.field?.value ?? ''));
+        const current = readDefaultSortSpec(settings);
+        settings.default = { field, direction: current.direction };
+        syncDirectionAvailability();
+        syncEffectiveHint();
+        options.onChange?.({ field });
+    };
+    const onDirectionChange = () => {
+        const direction = elements.direction?.checked ? 'desc' : 'asc';
+        const current = readDefaultSortSpec(settings);
+        settings.default = { field: current.field, direction };
+        syncEffectiveHint();
+        options.onChange?.({ direction });
     };
     const onApplyAllChange = () => {
         settings.applyToAll = !!elements.applyAll?.checked;
@@ -276,7 +369,8 @@ export function mountSettingsPanel(options) {
     };
 
     elements.enabled?.addEventListener?.('change', onEnabledChange);
-    elements.defaultMode?.addEventListener?.('change', onModeChange);
+    elements.field?.addEventListener?.('change', onFieldChange);
+    elements.direction?.addEventListener?.('change', onDirectionChange);
     elements.applyAll?.addEventListener?.('change', onApplyAllChange);
     elements.refresh?.addEventListener?.('click', onRefreshClick);
     elements.resetUsage?.addEventListener?.('click', onResetUsageClick);
@@ -309,7 +403,8 @@ export function mountSettingsPanel(options) {
         setBusy,
         destroy() {
             elements.enabled?.removeEventListener?.('change', onEnabledChange);
-            elements.defaultMode?.removeEventListener?.('change', onModeChange);
+            elements.field?.removeEventListener?.('change', onFieldChange);
+            elements.direction?.removeEventListener?.('change', onDirectionChange);
             elements.applyAll?.removeEventListener?.('change', onApplyAllChange);
             elements.refresh?.removeEventListener?.('click', onRefreshClick);
             elements.resetUsage?.removeEventListener?.('click', onResetUsageClick);

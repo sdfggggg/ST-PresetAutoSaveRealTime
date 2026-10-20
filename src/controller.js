@@ -19,7 +19,15 @@
  * @module preset-sorter/controller
  */
 
-import { DEFAULT_MODE, EXTENSION_NAME, MODE_ORDER } from './constants.js';
+import {
+    DEFAULT_DIRECTION,
+    DEFAULT_FIELD,
+    EXTENSION_NAME,
+    EXTENSION_VERSION,
+    FIELD_ORDER,
+    SORT_DIRECTIONS,
+    SORT_FIELDS,
+} from './constants.js';
 import {
     applyOptionOrder,
     discoverPresetManagers,
@@ -35,11 +43,11 @@ import { createHostFs } from './host-fs.js';
 import { setLocale, t } from './i18n.js';
 import { isSupportedPresetApi, normalizePresetApiId } from './preset-file.js';
 import { mountSettingsPanel } from './settings-ui.js';
-import { computePresetOrder } from './sort-engine.js';
+import { computePresetOrderByField, fieldDirectionToMode } from './sort-engine.js';
 import { createStatsStore } from './stats-store.js';
 
 const LOG_PREFIX = '[preset-sorter]';
-const VERSION = '1.0.0';
+const VERSION = EXTENSION_VERSION;
 
 /** @type {number} */
 const USAGE_DEDUPE_MS = 300;
@@ -297,36 +305,116 @@ function resolveTauriPathApi() {
 /* -------------------------------------------------------------------------- */
 
 /**
- * @typedef {object} PresetSorterSettings
- * @property {boolean} enabled Whether sorting is enabled.
- * @property {string} defaultMode Default sort mode.
- * @property {boolean} applyToAll Whether every manager uses `defaultMode`.
- * @property {Record<string, string>} perApi Per-API sort modes (used when `applyToAll` is off).
- * @property {object|null} stats Persisted stats payload.
+ * A field + direction sort specification (v1.1.0 settings shape).
+ * @typedef {object} SortSpec
+ * @property {string} field Sort field (`default` | `import` | `usage` | `recent`).
+ * @property {string} direction Sort direction (`asc` | `desc`).
  */
 
 /**
+ * @typedef {object} PresetSorterSettings
+ * @property {boolean} enabled Whether sorting is enabled.
+ * @property {boolean} applyToAll Whether every manager uses `default`.
+ * @property {SortSpec} default Default field + direction.
+ * @property {Record<string, SortSpec>} perApi Per-API field + direction (used when `applyToAll` is off).
+ * @property {object|null} stats Persisted stats payload.
+ */
+
+/** The upstream default: no reordering until the user picks a real field. @type {Readonly<SortSpec>} */
+const DEFAULT_SPEC = Object.freeze({ field: DEFAULT_FIELD, direction: DEFAULT_DIRECTION });
+
+/**
+ * v1.0.x combined sort mode -> v1.1.0 field + direction (silent migration map).
+ * @type {Readonly<Record<string, Readonly<SortSpec>>>}
+ */
+const LEGACY_MODE_SPECS = Object.freeze({
+    default: Object.freeze({ field: SORT_FIELDS.DEFAULT, direction: SORT_DIRECTIONS.DESC }),
+    'import-asc': Object.freeze({ field: SORT_FIELDS.IMPORT, direction: SORT_DIRECTIONS.ASC }),
+    'import-desc': Object.freeze({ field: SORT_FIELDS.IMPORT, direction: SORT_DIRECTIONS.DESC }),
+    'usage-asc': Object.freeze({ field: SORT_FIELDS.USAGE, direction: SORT_DIRECTIONS.ASC }),
+    'usage-desc': Object.freeze({ field: SORT_FIELDS.USAGE, direction: SORT_DIRECTIONS.DESC }),
+    'recent-asc': Object.freeze({ field: SORT_FIELDS.RECENT, direction: SORT_DIRECTIONS.ASC }),
+    'recent-desc': Object.freeze({ field: SORT_FIELDS.RECENT, direction: SORT_DIRECTIONS.DESC }),
+});
+
+/** @type {ReadonlySet<string>} */
+const VALID_FIELDS = new Set(FIELD_ORDER);
+
+/** @type {ReadonlySet<string>} */
+const VALID_DIRECTIONS = new Set(Object.values(SORT_DIRECTIONS));
+
+/**
+ * @param {unknown} field Raw sort field.
+ * @returns {string} Normalised field.
+ */
+function normalizeFieldValue(field) {
+    return typeof field === 'string' && VALID_FIELDS.has(field) ? field : DEFAULT_FIELD;
+}
+
+/**
+ * @param {unknown} direction Raw sort direction.
+ * @returns {string} Normalised direction.
+ */
+function normalizeDirectionValue(direction) {
+    return typeof direction === 'string' && VALID_DIRECTIONS.has(direction) ? direction : DEFAULT_DIRECTION;
+}
+
+/**
+ * Normalises a persisted sort spec. Accepts:
+ * - v1.1.0 objects `{field, direction}`;
+ * - v1.0.x legacy mode strings (`import-asc`, `usage-desc`, ...);
+ * - missing/invalid values (falls back to the provided default spec).
+ *
+ * The function is pure and idempotent, which makes the silent migration
+ * lossless: applying it to already-migrated values changes nothing.
+ *
+ * @param {unknown} raw Persisted spec or legacy mode string.
+ * @param {Readonly<SortSpec>} [fallback] Fallback spec.
+ * @returns {SortSpec} Normalised spec (new object).
+ */
+function normalizeSortSpec(raw, fallback = DEFAULT_SPEC) {
+    if (typeof raw === 'string') {
+        const legacy = LEGACY_MODE_SPECS[raw];
+        if (legacy) {
+            return { field: legacy.field, direction: legacy.direction };
+        }
+    } else if (raw && typeof raw === 'object') {
+        return {
+            field: normalizeFieldValue(raw.field),
+            direction: normalizeDirectionValue(raw.direction),
+        };
+    }
+    return { field: fallback.field, direction: fallback.direction };
+}
+
+/**
  * Validates/merges the persisted settings payload.
+ *
+ * v1.0.x payloads (`defaultMode` + per-API mode strings) are silently upgraded to
+ * the v1.1.0 field + direction shape on load; the upgraded shape is persisted on
+ * the next save. Mixed payloads (v2 `default` + v1 `perApi` strings) are handled
+ * per entry.
  *
  * @param {unknown} raw Persisted value.
  * @returns {PresetSorterSettings} Normalized settings.
  */
 function loadSettings(raw) {
     const source = raw && typeof raw === 'object' ? raw : {};
-    /** @type {Record<string, string>} */
+    const defaultSpec = normalizeSortSpec(source.default ?? source.defaultMode, DEFAULT_SPEC);
+    /** @type {Record<string, SortSpec>} */
     const perApi = {};
     if (source.perApi && typeof source.perApi === 'object' && !Array.isArray(source.perApi)) {
-        for (const [rawApiId, rawMode] of Object.entries(source.perApi)) {
+        for (const [rawApiId, rawSpec] of Object.entries(source.perApi)) {
             const apiId = normalizePresetApiId(String(rawApiId));
-            if (isSupportedPresetApi(apiId) && MODE_ORDER.includes(String(rawMode))) {
-                perApi[apiId] = String(rawMode);
+            if (isSupportedPresetApi(apiId)) {
+                perApi[apiId] = normalizeSortSpec(rawSpec, defaultSpec);
             }
         }
     }
     return {
         enabled: source.enabled !== false,
-        defaultMode: MODE_ORDER.includes(String(source.defaultMode)) ? String(source.defaultMode) : DEFAULT_MODE,
         applyToAll: source.applyToAll !== false,
+        default: defaultSpec,
         perApi,
         stats: source.stats && typeof source.stats === 'object' ? source.stats : null,
     };
@@ -334,29 +422,44 @@ function loadSettings(raw) {
 
 /**
  * @param {string} apiId Canonical API id.
- * @returns {string} Sort mode selected in the controls (ignores the global enable flag).
+ * @returns {SortSpec} Sort spec selected in the controls (ignores the global enable flag).
  */
-function storedModeFor(apiId) {
+function storedSpecFor(apiId) {
     const rt = runtime;
     if (!rt) {
-        return DEFAULT_MODE;
+        return { field: DEFAULT_FIELD, direction: DEFAULT_DIRECTION };
     }
     if (rt.settings.applyToAll) {
-        return rt.settings.defaultMode;
+        return rt.settings.default;
     }
-    return rt.settings.perApi[apiId] ?? rt.settings.defaultMode;
+    return rt.settings.perApi[apiId] ?? rt.settings.default;
 }
 
 /**
  * @param {string} apiId Canonical API id.
- * @returns {string} Effective sort mode (disabled sorting always restores upstream order).
+ * @returns {SortSpec} Effective sort spec (disabled sorting always restores upstream order).
  */
-function resolveMode(apiId) {
+function resolveSpec(apiId) {
     const rt = runtime;
     if (!rt || !rt.settings.enabled) {
-        return DEFAULT_MODE;
+        return { field: DEFAULT_FIELD, direction: DEFAULT_DIRECTION };
     }
-    return storedModeFor(apiId);
+    return storedSpecFor(apiId);
+}
+
+/**
+ * Pure settings migration/normalisation helper, exported for tests/tooling.
+ *
+ * Accepts a v1.0.x payload (`defaultMode` + per-API mode strings) or a v1.1.0
+ * payload (`default` + per-API `{field, direction}` objects) and returns the
+ * normalised v1.1.0 settings shape. The function is idempotent and does not
+ * mutate its input.
+ *
+ * @param {unknown} raw Persisted settings payload (or `undefined`).
+ * @returns {PresetSorterSettings} Normalised settings.
+ */
+export function migratePresetSorterSettings(raw) {
+    return loadSettings(raw);
 }
 
 /**
@@ -458,7 +561,8 @@ function attachManager(apiId, select) {
 
     const existing = rt.managers.get(canonicalApiId);
     if (existing && existing.select === select) {
-        existing.control?.setMode(storedModeFor(canonicalApiId));
+        const spec = storedSpecFor(canonicalApiId);
+        existing.control?.setState(spec.field, spec.direction);
         existing.control?.setHidden(!rt.settings.enabled);
         return;
     }
@@ -474,11 +578,13 @@ function attachManager(apiId, select) {
         control: null,
     };
     state.observer = observePresetSelect(select, records => onSelectMutated(state, records));
+    const spec = storedSpecFor(canonicalApiId);
     state.control = injectSortControl({
         select,
         apiId: canonicalApiId,
-        mode: storedModeFor(canonicalApiId),
-        onChange: onControlModeChange,
+        field: spec.field,
+        direction: spec.direction,
+        onChange: onControlStateChange,
     });
     state.control?.setHidden(!rt.settings.enabled);
     rt.managers.set(canonicalApiId, state);
@@ -561,7 +667,7 @@ function getSortStats(apiId, name) {
 /**
  * Computes the desired option order for a manager.
  *
- * The "default" mode always restores the upstream order tracked in
+ * The "default" field always restores the upstream order tracked in
  * `state.originalOrder` (which survives re-sorting and option repopulation).
  *
  * @param {PresetManagerState} state Manager state.
@@ -596,10 +702,10 @@ function desiredItemsForState(state) {
         baseItems.push({ name: entry.name, value: entry.value });
     }
 
-    const mode = resolveMode(state.apiId);
-    const ordered = mode === DEFAULT_MODE
+    const spec = resolveSpec(state.apiId);
+    const ordered = spec.field === SORT_FIELDS.DEFAULT
         ? baseItems.slice()
-        : computePresetOrder(baseItems, mode, name => getSortStats(state.apiId, name));
+        : computePresetOrderByField(baseItems, spec.field, spec.direction, name => getSortStats(state.apiId, name));
 
     return [...placeholders.map(entry => ({ name: entry.name, value: entry.value })), ...ordered];
 }
@@ -1074,7 +1180,7 @@ function onExtensionSettingsLoaded() {
             rt.store = createStatsStore({ data: merged.stats, logger: console });
         }
         rt.settings.enabled = merged.enabled;
-        rt.settings.defaultMode = merged.defaultMode;
+        rt.settings.default = merged.default;
         rt.settings.applyToAll = merged.applyToAll;
         rt.settings.perApi = merged.perApi;
         syncControls();
@@ -1091,21 +1197,26 @@ function onExtensionSettingsLoaded() {
 /* -------------------------------------------------------------------------- */
 
 /**
- * Handles a sort-mode change coming from one injected control.
+ * Handles a field + direction change coming from one injected control.
  *
- * @param {string} mode New mode.
+ * When "apply to all preset managers" is on the change updates the shared
+ * default spec; otherwise it is stored per API.
+ *
+ * @param {string} field New sort field.
+ * @param {string} direction New sort direction.
  * @param {string} apiId API id whose control changed.
  * @returns {void}
  */
-function onControlModeChange(mode, apiId) {
+function onControlStateChange(field, direction, apiId) {
     const rt = runtime;
-    if (!rt || !MODE_ORDER.includes(mode)) {
+    if (!rt) {
         return;
     }
+    const spec = normalizeSortSpec({ field, direction }, DEFAULT_SPEC);
     if (rt.settings.applyToAll) {
-        rt.settings.defaultMode = mode;
+        rt.settings.default = spec;
     } else {
-        rt.settings.perApi[apiId] = mode;
+        rt.settings.perApi[apiId] = spec;
     }
     syncControls();
     applyAllStates();
@@ -1124,15 +1235,17 @@ function syncControls() {
         return;
     }
     for (const state of rt.managers.values()) {
-        state.control?.setMode(storedModeFor(state.apiId));
+        const spec = storedSpecFor(state.apiId);
+        state.control?.setState(spec.field, spec.direction);
         state.control?.setHidden(!rt.settings.enabled);
     }
 }
 
 /**
- * Handles a settings panel change (toggle / default mode select).
+ * Handles a settings panel change (toggles / default field / direction).
+ * The panel has already mutated the live settings object.
  *
- * @param {{enabled?: boolean, defaultMode?: string, applyToAll?: boolean}} patch Changed fields.
+ * @param {{enabled?: boolean, applyToAll?: boolean, field?: string, direction?: string}} patch Changed fields.
  * @returns {void}
  */
 function onSettingsPanelChange(patch) {
@@ -1526,17 +1639,28 @@ function buildProbeStatus() {
     const fsState = !fs.available
         ? 'unavailable'
         : (!fs.initialized ? 'initializing' : (fs.enabled ? 'ready' : 'disabled'));
+    /** @type {Record<string, {field: string, direction: string}>} */
+    const perApiSpecs = {};
     /** @type {Record<string, string>} */
     const perApiModes = {};
     for (const state of rt.managers.values()) {
-        perApiModes[state.apiId] = resolveMode(state.apiId);
+        const spec = resolveSpec(state.apiId);
+        perApiSpecs[state.apiId] = { field: spec.field, direction: spec.direction };
+        perApiModes[state.apiId] = fieldDirectionToMode(spec.field, spec.direction);
     }
+    const defaultSpec = rt.settings.default;
+    const defaultMode = fieldDirectionToMode(defaultSpec.field, defaultSpec.direction);
     return {
         version: VERSION,
         initialized: true,
         enabled: rt.settings.enabled,
-        mode: storedModeFor(''),
-        defaultMode: rt.settings.defaultMode,
+        // v1.1.0 field + direction shape.
+        default: { field: defaultSpec.field, direction: defaultSpec.direction },
+        perApi: perApiSpecs,
+        fields: [...FIELD_ORDER],
+        // Backward-compatible v1 fields kept for older probes / tooling.
+        mode: defaultMode,
+        defaultMode,
         applyToAll: rt.settings.applyToAll,
         perApiModes,
         managers: [...rt.managers.keys()],

@@ -18,20 +18,39 @@
  * @module preset-sorter/dom-bridge
  */
 
-import { DEFAULT_MODE, MODE_ORDER, PRESET_APIS, PRESET_SELECT_SELECTOR } from './constants.js';
-import { formatImportSourceLabel, formatModeLabel, formatTimestamp, t } from './i18n.js';
+import {
+    DEFAULT_DIRECTION,
+    DEFAULT_FIELD,
+    DIRECTION_ORDER,
+    FIELD_ORDER,
+    PRESET_APIS,
+    PRESET_SELECT_SELECTOR,
+} from './constants.js';
+import { formatDirectionLabel, formatFieldLabel, formatImportSourceLabel, formatTimestamp, t } from './i18n.js';
 import { isSupportedPresetApi, normalizePresetApiId } from './preset-file.js';
 
-/** `class` of the injected sort-mode control. @type {string} */
-export const SORT_CONTROL_CLASS = 'preset-sorter-sort-control';
+/** `class` of the injected field + direction control group. @type {string} */
+export const SORT_CONTROL_CLASS = 'preset-sorter-control-group';
 
-/** Data attribute carried by the injected sort-mode control (value = apiId). @type {string} */
+/** Data attribute carried by the injected control group (value = apiId). @type {string} */
 export const SORT_CONTROL_ATTR = 'data-preset-sorter-control';
+
+/** `class` of the sort-field `<select>` inside the control group. @type {string} */
+export const SORT_FIELD_CLASS = 'preset-sorter-field-select';
+
+/** `class` of the independent 正序/倒序 checkbox inside the control group. @type {string} */
+export const SORT_DIRECTION_CLASS = 'preset-sorter-direction-checkbox';
+
+/** `class` of the direction `<label>` wrapper inside the control group. @type {string} */
+export const SORT_DIRECTION_LABEL_CLASS = 'preset-sorter-direction-label';
+
+/** `class` of the decorative sort icon. @type {string} */
+export const SORT_ICON_CLASS = 'preset-sorter-sort-icon';
 
 /** The value of the non-file "GUI KoboldAI Settings" placeholder option. @type {string} */
 export const PRESET_PLACEHOLDER_VALUE = 'gui';
 
-/** @type {WeakMap<Element, {element: HTMLSelectElement, setMode: Function, setHidden: Function, dispose: Function}>} */
+/** @type {WeakMap<Element, {element: any, apiId: string, getState: Function, setState: Function, setHidden: Function, dispose: Function}>} */
 const controlBySelect = new WeakMap();
 
 /** @type {WeakMap<Element, Map<string, string>>} */
@@ -563,28 +582,63 @@ export function updateOptionTooltips(select, getStats) {
 }
 
 /**
- * Injects (or reuses) the compact sort-mode control next to a preset select.
+ * @param {unknown} field Raw sort field.
+ * @returns {string} Normalised field.
+ */
+function normalizeFieldValue(field) {
+    return FIELD_ORDER.includes(field) ? field : DEFAULT_FIELD;
+}
+
+/**
+ * @param {unknown} direction Raw sort direction.
+ * @returns {string} Normalised direction.
+ */
+function normalizeDirectionValue(direction) {
+    return DIRECTION_ORDER.includes(direction) ? direction : DEFAULT_DIRECTION;
+}
+
+/**
+ * Injects (or reuses) the compact v1.1.0 sort control group next to a preset
+ * select: a small sort icon, a **sort-field** `<select>` and an **independent**
+ * 「倒序」 checkbox (checked = descending, unchecked = ascending). The direction
+ * checkbox is disabled and dimmed while the field is "默认排序" / "Default order".
  *
- * The control is a sibling inside the same flex row, so replacing the select's
+ * The group is a sibling inside the same flex row, so replacing the select's
  * options never removes it. Repeated calls with the same select are idempotent
- * and only synchronize the current mode.
+ * and only synchronize the current field + direction. The
+ * `data-preset-sorter-control="<apiId>"` attribute is preserved for tests/probes.
  *
  * @param {object} options Options.
  * @param {HTMLSelectElement|any} options.select Preset select element.
  * @param {string} options.apiId API id.
- * @param {string} [options.mode] Current sort mode.
- * @param {(mode: string, apiId: string) => void} [options.onChange] Mode change handler.
+ * @param {string} [options.field] Current sort field (`default` | `import` | `usage` | `recent`).
+ * @param {string} [options.direction] Current sort direction (`asc` | `desc`).
+ * @param {(field: string, direction: string, apiId: string) => void} [options.onChange] Change handler.
  * @param {Document|null} [options.document] Document override (tests).
- * @returns {{element: any, setMode: (mode: string) => void, setHidden: (hidden: boolean) => void, dispose: () => void}|null} Control handle.
+ * @returns {{
+ *   element: any,
+ *   apiId: string,
+ *   getState: () => {field: string, direction: string},
+ *   setState: (field: string, direction: string) => void,
+ *   setHidden: (hidden: boolean) => void,
+ *   dispose: () => void,
+ * }|null} Control handle.
  */
-export function injectSortControl({ select, apiId, mode = DEFAULT_MODE, onChange, document: documentOverride = null } = {}) {
+export function injectSortControl({
+    select,
+    apiId,
+    field = DEFAULT_FIELD,
+    direction = DEFAULT_DIRECTION,
+    onChange,
+    document: documentOverride = null,
+} = {}) {
     if (!select) {
         return null;
     }
 
     const existing = controlBySelect.get(select);
     if (existing && existing.element) {
-        existing.setMode(mode);
+        existing.setState(field, direction);
         return existing;
     }
 
@@ -593,47 +647,113 @@ export function injectSortControl({ select, apiId, mode = DEFAULT_MODE, onChange
         return null;
     }
 
-    const control = documentRef.createElement('select');
-    control.className = `text_pole ${SORT_CONTROL_CLASS}`;
+    const normalizedField = normalizeFieldValue(field);
+    const normalizedDirection = normalizeDirectionValue(direction);
+
+    // --- control group container -------------------------------------------------
+    const group = documentRef.createElement('span');
+    group.className = SORT_CONTROL_CLASS;
     try {
-        control.setAttribute(SORT_CONTROL_ATTR, apiId);
+        group.setAttribute(SORT_CONTROL_ATTR, apiId);
+        group.setAttribute('role', 'group');
+        group.setAttribute('aria-label', t('control.groupLabel'));
     } catch {
         // Test doubles may not implement setAttribute.
     }
-    control.title = t('sort.title');
-    if (typeof control.setAttribute === 'function') {
-        try {
-            control.setAttribute('aria-label', t('sort.label'));
-        } catch {
-            // Ignore.
-        }
-    }
-    for (const modeOption of MODE_ORDER) {
-        const option = documentRef.createElement('option');
-        option.value = modeOption;
-        option.textContent = formatModeLabel(modeOption);
-        control.appendChild(option);
-    }
-    control.value = MODE_ORDER.includes(mode) ? mode : DEFAULT_MODE;
+    group.title = t('control.title');
 
+    // --- decorative sort icon ----------------------------------------------------
+    const icon = documentRef.createElement('i');
+    icon.className = `fa-solid fa-arrow-down-wide-short ${SORT_ICON_CLASS}`;
+    try {
+        icon.setAttribute('aria-hidden', 'true');
+    } catch {
+        // Ignore.
+    }
+    group.appendChild(icon);
+
+    // --- sort field select -------------------------------------------------------
+    const fieldSelect = documentRef.createElement('select');
+    fieldSelect.className = `text_pole ${SORT_FIELD_CLASS}`;
+    fieldSelect.title = t('control.title');
+    try {
+        fieldSelect.setAttribute('aria-label', t('field.label'));
+    } catch {
+        // Ignore.
+    }
+    for (const fieldOption of FIELD_ORDER) {
+        const option = documentRef.createElement('option');
+        option.value = fieldOption;
+        option.textContent = formatFieldLabel(fieldOption);
+        fieldSelect.appendChild(option);
+    }
+    fieldSelect.value = normalizedField;
+    group.appendChild(fieldSelect);
+
+    // --- independent direction checkbox -----------------------------------------
+    const directionLabel = documentRef.createElement('label');
+    directionLabel.className = `checkbox_label ${SORT_DIRECTION_LABEL_CLASS}`;
+    const directionCheckbox = documentRef.createElement('input');
+    directionCheckbox.type = 'checkbox';
+    directionCheckbox.className = SORT_DIRECTION_CLASS;
+    directionCheckbox.checked = normalizedDirection === 'desc';
+    try {
+        directionCheckbox.setAttribute('aria-label', t('direction.title'));
+    } catch {
+        // Ignore.
+    }
+    const directionText = documentRef.createElement('span');
+    directionText.className = 'preset-sorter-direction-text';
+    directionText.textContent = t('direction.label');
+    directionLabel.appendChild(directionCheckbox);
+    directionLabel.appendChild(directionText);
+    group.appendChild(directionLabel);
+
+    /**
+     * Enables/disables the direction checkbox according to the current field and
+     * keeps the tooltip in sync (the checkbox has no effect for "default order").
+     *
+     * @returns {void}
+     */
+    function syncDirectionAvailability() {
+        const isDefaultField = fieldSelect.value === DEFAULT_FIELD;
+        directionCheckbox.disabled = isDefaultField;
+        directionLabel.classList.toggle('is-disabled', isDefaultField);
+        directionLabel.title = isDefaultField ? t('direction.disabledHint') : t('direction.title');
+    }
+    syncDirectionAvailability();
+
+    /**
+     * Normalises the UI state and notifies the controller.
+     *
+     * @returns {void}
+     */
     const handleChange = () => {
-        const nextMode = String(control.value);
+        const nextField = normalizeFieldValue(String(fieldSelect.value));
+        if (String(fieldSelect.value) !== nextField) {
+            fieldSelect.value = nextField;
+        }
+        syncDirectionAvailability();
+        const nextDirection = directionCheckbox.checked ? 'desc' : 'asc';
         if (typeof onChange === 'function') {
-            onChange(MODE_ORDER.includes(nextMode) ? nextMode : DEFAULT_MODE, apiId);
+            onChange(nextField, nextDirection, apiId);
         }
     };
-    if (typeof control.addEventListener === 'function') {
-        control.addEventListener('change', handleChange);
+    if (typeof fieldSelect.addEventListener === 'function') {
+        fieldSelect.addEventListener('change', handleChange);
+    }
+    if (typeof directionCheckbox.addEventListener === 'function') {
+        directionCheckbox.addEventListener('change', handleChange);
     }
 
     // Insert as a sibling of the preset select: prefer the end of the flex row.
     const row = getPresetRow(select);
     let inserted = false;
     if (row && typeof row.appendChild === 'function') {
-        row.appendChild(control);
+        row.appendChild(group);
         inserted = true;
     } else if (typeof select.insertAdjacentElement === 'function') {
-        select.insertAdjacentElement('afterend', control);
+        select.insertAdjacentElement('afterend', group);
         inserted = true;
     }
     if (!inserted) {
@@ -641,39 +761,57 @@ export function injectSortControl({ select, apiId, mode = DEFAULT_MODE, onChange
     }
 
     const handle = {
-        element: control,
+        element: group,
         apiId,
         /**
-         * @param {string} nextMode Sort mode.
+         * @returns {{field: string, direction: string}} Current control state.
+         */
+        getState() {
+            return {
+                field: normalizeFieldValue(String(fieldSelect.value)),
+                direction: directionCheckbox.checked ? 'desc' : 'asc',
+            };
+        },
+        /**
+         * @param {string} nextField Sort field.
+         * @param {string} nextDirection Sort direction.
          * @returns {void}
          */
-        setMode(nextMode) {
-            const normalized = MODE_ORDER.includes(nextMode) ? nextMode : DEFAULT_MODE;
-            if (String(control.value) !== normalized) {
-                control.value = normalized;
+        setState(nextField, nextDirection) {
+            const normalizedNextField = normalizeFieldValue(nextField);
+            if (String(fieldSelect.value) !== normalizedNextField) {
+                fieldSelect.value = normalizedNextField;
             }
+            const wantChecked = normalizeDirectionValue(nextDirection) === 'desc';
+            if (Boolean(directionCheckbox.checked) !== wantChecked) {
+                directionCheckbox.checked = wantChecked;
+            }
+            syncDirectionAvailability();
         },
         /**
          * @param {boolean} hidden Whether the control should be hidden.
          * @returns {void}
          */
         setHidden(hidden) {
-            control.hidden = !!hidden;
+            group.hidden = !!hidden;
         },
         /**
          * @returns {void}
          */
         dispose() {
             try {
-                if (typeof control.removeEventListener === 'function') {
-                    control.removeEventListener('change', handleChange);
+                if (typeof fieldSelect.removeEventListener === 'function') {
+                    fieldSelect.removeEventListener('change', handleChange);
+                }
+                if (typeof directionCheckbox.removeEventListener === 'function') {
+                    directionCheckbox.removeEventListener('change', handleChange);
                 }
             } catch {
                 // Ignore.
             }
             try {
-                if (typeof control.remove === 'function') {
-                    control.remove();
+                if (typeof group.remove === 'function') {
+                    group.remove();
                 }
             } catch {
                 // Ignore.

@@ -7,10 +7,20 @@
  * broken by the option's original index, so the same input always produces the
  * same output.
  *
+ * v1.1.0 sorts by an explicit **field + direction** pair
+ * (`computePresetOrderByField`). The legacy combined mode strings of v1 are still
+ * accepted through `computePresetOrder` for backward compatibility.
+ *
  * @module preset-sorter/sort-engine
  */
 
-import { SORT_MODES } from './constants.js';
+import {
+    DEFAULT_DIRECTION,
+    DEFAULT_FIELD,
+    SORT_DIRECTIONS,
+    SORT_FIELDS,
+    SORT_MODES,
+} from './constants.js';
 
 /**
  * A single preset dropdown option snapshot.
@@ -28,6 +38,13 @@ import { SORT_MODES } from './constants.js';
  * @property {number|null} [importTime] Import/creation timestamp (ms since epoch).
  * @property {string|null} [importSource] Where `importTime` came from.
  * @property {number|null} [firstSeenAt] First time the extension saw this preset (ms since epoch).
+ */
+
+/**
+ * A field + direction sort specification.
+ * @typedef {object} SortSpec
+ * @property {string} field One of `SORT_FIELDS` (`default` | `import` | `usage` | `recent`).
+ * @property {string} direction One of `SORT_DIRECTIONS` (`asc` | `desc`).
  */
 
 /**
@@ -53,86 +70,141 @@ function readCount(stats) {
     return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0;
 }
 
+/** Legacy v1 combined mode -> field + direction. @type {Readonly<Record<string, Readonly<SortSpec>>>} */
+const LEGACY_MODE_SPECS = Object.freeze({
+    [SORT_MODES.DEFAULT]: Object.freeze({ field: SORT_FIELDS.DEFAULT, direction: SORT_DIRECTIONS.DESC }),
+    [SORT_MODES.IMPORT_ASC]: Object.freeze({ field: SORT_FIELDS.IMPORT, direction: SORT_DIRECTIONS.ASC }),
+    [SORT_MODES.IMPORT_DESC]: Object.freeze({ field: SORT_FIELDS.IMPORT, direction: SORT_DIRECTIONS.DESC }),
+    [SORT_MODES.USAGE_ASC]: Object.freeze({ field: SORT_FIELDS.USAGE, direction: SORT_DIRECTIONS.ASC }),
+    [SORT_MODES.USAGE_DESC]: Object.freeze({ field: SORT_FIELDS.USAGE, direction: SORT_DIRECTIONS.DESC }),
+    [SORT_MODES.RECENT_ASC]: Object.freeze({ field: SORT_FIELDS.RECENT, direction: SORT_DIRECTIONS.ASC }),
+    [SORT_MODES.RECENT_DESC]: Object.freeze({ field: SORT_FIELDS.RECENT, direction: SORT_DIRECTIONS.DESC }),
+});
+
 /** @type {ReadonlySet<string>} */
-const VALID_MODES = new Set(Object.values(SORT_MODES));
+const VALID_FIELDS = new Set(Object.values(SORT_FIELDS));
+
+/** @type {ReadonlySet<string>} */
+const VALID_DIRECTIONS = new Set(Object.values(SORT_DIRECTIONS));
 
 /**
- * Builds the comparator for one sort mode.
- *
- * Import modes put presets without a known import time last (in both ascending
- * and descending variants), then fall back to the original order.
- *
- * @param {string} mode Sort mode.
- * @returns {((a: {originalIndex: number, stats: PresetStats|undefined}, b: {originalIndex: number, stats: PresetStats|undefined}) => number)|null} Comparator, or `null` for "keep original order".
+ * @param {unknown} field Raw sort field.
+ * @returns {string} Normalised field (`default` for unknown values).
  */
-function createComparator(mode) {
-    switch (mode) {
-        case SORT_MODES.IMPORT_ASC:
+function normalizeField(field) {
+    return typeof field === 'string' && VALID_FIELDS.has(field) ? field : DEFAULT_FIELD;
+}
+
+/**
+ * @param {unknown} direction Raw sort direction.
+ * @returns {string} Normalised direction (`desc` for unknown values).
+ */
+function normalizeDirection(direction) {
+    return typeof direction === 'string' && VALID_DIRECTIONS.has(direction) ? direction : DEFAULT_DIRECTION;
+}
+
+/**
+ * Converts a legacy combined sort mode to a field + direction spec.
+ * Unknown/invalid modes map to the upstream default order.
+ *
+ * @param {string} mode Legacy sort mode (e.g. `import-asc`).
+ * @returns {SortSpec} Normalised sort spec.
+ */
+export function modeToFieldDirection(mode) {
+    const spec = typeof mode === 'string' ? LEGACY_MODE_SPECS[mode] : undefined;
+    if (!spec) {
+        return { field: DEFAULT_FIELD, direction: DEFAULT_DIRECTION };
+    }
+    return { field: spec.field, direction: spec.direction };
+}
+
+/**
+ * Converts a field + direction spec to its legacy combined mode string.
+ * Useful for diagnostics/backward-compatible probe payloads.
+ *
+ * @param {string} field Sort field.
+ * @param {string} direction Sort direction.
+ * @returns {string} Legacy sort mode string.
+ */
+export function fieldDirectionToMode(field, direction) {
+    const normalizedField = normalizeField(field);
+    const normalizedDirection = normalizeDirection(direction);
+    if (normalizedField === SORT_FIELDS.DEFAULT) {
+        return SORT_MODES.DEFAULT;
+    }
+    return `${normalizedField}-${normalizedDirection}`;
+}
+
+/**
+ * Direction multiplier used by the shared comparator.
+ *
+ * @param {string} direction Normalised direction.
+ * @returns {number} `1` for ascending, `-1` for descending.
+ */
+function directionFactor(direction) {
+    return direction === SORT_DIRECTIONS.ASC ? 1 : -1;
+}
+
+/**
+ * Builds the comparator for a field + direction spec.
+ *
+ * Semantics:
+ * - `import`: primary `importTime`; unknown import times rank **last** in both
+ *   directions; ties keep the original order.
+ * - `usage`: primary `count`, secondary `lastUsedAt`; direction applies to both
+ *   (missing `lastUsedAt` is treated as the oldest possible value `0`).
+ * - `recent`: primary `lastUsedAt`, secondary `count`; direction applies to both.
+ * - ties always fall back to the original option order.
+ *
+ * @param {string} field Normalised sort field.
+ * @param {string} direction Normalised sort direction.
+ * @returns {((a: {originalIndex: number, stats: PresetStats|undefined}, b: {originalIndex: number, stats: PresetStats|undefined}) => number)|null} Comparator, or `null` to keep the original order.
+ */
+function createComparator(field, direction) {
+    const factor = directionFactor(direction);
+
+    switch (field) {
+        case SORT_FIELDS.IMPORT:
             return (a, b) => {
                 const timeA = readTimestamp(a.stats, 'importTime');
                 const timeB = readTimestamp(b.stats, 'importTime');
                 if (timeA === null && timeB === null) {
                     return a.originalIndex - b.originalIndex;
                 }
+                // Unknown import times rank last regardless of direction.
                 if (timeA === null) {
                     return 1;
                 }
                 if (timeB === null) {
                     return -1;
                 }
-                return timeA - timeB || a.originalIndex - b.originalIndex;
+                return factor * (timeA - timeB) || a.originalIndex - b.originalIndex;
             };
-        case SORT_MODES.IMPORT_DESC:
+        case SORT_FIELDS.USAGE:
             return (a, b) => {
-                const timeA = readTimestamp(a.stats, 'importTime');
-                const timeB = readTimestamp(b.stats, 'importTime');
-                if (timeA === null && timeB === null) {
-                    return a.originalIndex - b.originalIndex;
-                }
-                if (timeA === null) {
-                    return 1;
-                }
-                if (timeB === null) {
-                    return -1;
-                }
-                return timeB - timeA || a.originalIndex - b.originalIndex;
-            };
-        case SORT_MODES.USAGE_DESC:
-            return (a, b) => {
-                const countDelta = readCount(b.stats) - readCount(a.stats);
+                const countDelta = readCount(a.stats) - readCount(b.stats);
                 if (countDelta !== 0) {
-                    return countDelta;
+                    return factor * countDelta;
                 }
-                const lastUsedA = readTimestamp(a.stats, 'lastUsedAt');
-                const lastUsedB = readTimestamp(b.stats, 'lastUsedAt');
-                if (lastUsedA !== null && lastUsedB !== null && lastUsedA !== lastUsedB) {
-                    return lastUsedB - lastUsedA;
-                }
-                if (lastUsedA === null && lastUsedB !== null) {
-                    return 1;
-                }
-                if (lastUsedA !== null && lastUsedB === null) {
-                    return -1;
+                const lastUsedA = readTimestamp(a.stats, 'lastUsedAt') ?? 0;
+                const lastUsedB = readTimestamp(b.stats, 'lastUsedAt') ?? 0;
+                if (lastUsedA !== lastUsedB) {
+                    return factor * (lastUsedA - lastUsedB);
                 }
                 return a.originalIndex - b.originalIndex;
             };
-        case SORT_MODES.RECENT_DESC:
+        case SORT_FIELDS.RECENT:
             return (a, b) => {
-                const lastUsedA = readTimestamp(a.stats, 'lastUsedAt');
-                const lastUsedB = readTimestamp(b.stats, 'lastUsedAt');
-                if (lastUsedA === null && lastUsedB === null) {
-                    return readCount(b.stats) - readCount(a.stats) || a.originalIndex - b.originalIndex;
-                }
-                if (lastUsedA === null) {
-                    return 1;
-                }
-                if (lastUsedB === null) {
-                    return -1;
-                }
+                const lastUsedA = readTimestamp(a.stats, 'lastUsedAt') ?? 0;
+                const lastUsedB = readTimestamp(b.stats, 'lastUsedAt') ?? 0;
                 if (lastUsedA !== lastUsedB) {
-                    return lastUsedB - lastUsedA;
+                    return factor * (lastUsedA - lastUsedB);
                 }
-                return readCount(b.stats) - readCount(a.stats) || a.originalIndex - b.originalIndex;
+                const countDelta = readCount(a.stats) - readCount(b.stats);
+                if (countDelta !== 0) {
+                    return factor * countDelta;
+                }
+                return a.originalIndex - b.originalIndex;
             };
         default:
             return null;
@@ -140,25 +212,25 @@ function createComparator(mode) {
 }
 
 /**
- * Computes the desired order for a list of preset options.
+ * Computes the desired order for a list of preset options by field + direction.
  *
- * Supported modes:
- * - `default`: original order (upstream SillyTavern order).
- * - `import-asc` / `import-desc`: by `stats.importTime`; unknown import times are last, ties by original order.
- * - `usage-desc`: by `stats.count` descending, then `lastUsedAt` descending, then original order.
- * - `recent-desc`: by `stats.lastUsedAt` descending, then `count` descending, then original order.
- *
- * Any unknown mode falls back to the original order. The input array and its
- * items are never mutated; a new array is returned.
+ * `field === 'default'` (or any unknown field) keeps the upstream input order.
+ * The input array and its items are never mutated; a new array is returned.
  *
  * @param {PresetItem[]} items Current options in DOM order.
- * @param {string} mode Sort mode (see {@link SORT_MODES}).
+ * @param {string} field Sort field (`default` | `import` | `usage` | `recent`).
+ * @param {string} direction Sort direction (`asc` | `desc`).
  * @param {(name: string) => PresetStats|undefined} getStats Stats accessor for a preset name.
  * @returns {PresetItem[]} Items in desired order (new array, same item references).
  */
-export function computePresetOrder(items, mode, getStats) {
+export function computePresetOrderByField(items, field, direction, getStats) {
     const list = Array.isArray(items) ? items : [];
-    const comparator = VALID_MODES.has(mode) ? createComparator(mode) : null;
+    const normalizedField = normalizeField(field);
+    const normalizedDirection = normalizeDirection(direction);
+    if (normalizedField === SORT_FIELDS.DEFAULT) {
+        return list.slice();
+    }
+    const comparator = createComparator(normalizedField, normalizedDirection);
     if (!comparator) {
         return list.slice();
     }
@@ -172,6 +244,28 @@ export function computePresetOrder(items, mode, getStats) {
 
     decorated.sort(comparator);
     return decorated.map(entry => entry.item);
+}
+
+/**
+ * Computes the desired order for a list of preset options.
+ *
+ * Backward-compatible wrapper around {@link computePresetOrderByField} accepting
+ * the legacy combined mode strings:
+ * - `default`: original order (upstream SillyTavern order).
+ * - `import-asc` / `import-desc`: by `stats.importTime`; unknown import times are last.
+ * - `usage-asc` / `usage-desc`: by `stats.count`, then `lastUsedAt`.
+ * - `recent-asc` / `recent-desc`: by `stats.lastUsedAt`, then `count`.
+ *
+ * Any unknown mode falls back to the original order.
+ *
+ * @param {PresetItem[]} items Current options in DOM order.
+ * @param {string} mode Legacy sort mode (see {@link SORT_MODES}).
+ * @param {(name: string) => PresetStats|undefined} getStats Stats accessor for a preset name.
+ * @returns {PresetItem[]} Items in desired order (new array, same item references).
+ */
+export function computePresetOrder(items, mode, getStats) {
+    const spec = modeToFieldDirection(mode);
+    return computePresetOrderByField(items, spec.field, spec.direction, getStats);
 }
 
 /**
@@ -198,7 +292,7 @@ export function orderSignature(items) {
  * compared as strings. Length differences are detected as well.
  *
  * @param {ArrayLike<{value?: string|number}>|null|undefined} currentValues Current option elements/values in DOM order.
- * @param {Array<{value: string|number}>|null|undefined} desired Desired option order (usually the output of {@link computePresetOrder}).
+ * @param {Array<{value: string|number}>|null|undefined} desired Desired option order (usually the output of {@link computePresetOrderByField}).
  * @returns {boolean} Whether the DOM order already equals the desired order.
  */
 export function isOrderCurrent(currentValues, desired) {

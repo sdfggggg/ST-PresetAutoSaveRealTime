@@ -71,7 +71,7 @@ const JSON_FILE_PATTERN = /\.json$/i;
  * @property {boolean} initialized Directory resolution finished successfully.
  * @property {string|null} reason Why the bridge is unavailable/disabled.
  * @property {string|null} dataRoot Resolved data root path.
- * @property {string|null} dataRootSource `runtime_paths` | `app_data_dir` | null.
+ * @property {string|null} dataRootSource `user_directory_root` | `runtime_paths` | `app_data_dir` | null.
  * @property {string|null} handle Current user handle.
  * @property {string|null} directorySource Source of the preset directories.
  * @property {number} failureCount Consecutive hard command failures.
@@ -203,7 +203,34 @@ export function createHostFs({ invoke = null, pathApi = null, getCurrentUserHand
     }
 
     /**
+     * Derives the data root from a `<data_root>/<handle>` path returned by
+     * `get_user_directory` (diagnostics only; used on platforms where the
+     * desktop-only `get_runtime_paths` command is not registered).
+     *
+     * @param {unknown} handleRoot Absolute `<data_root>/<handle>` path.
+     * @returns {string|null} Data root path, or `null` when it cannot be derived.
+     */
+    function deriveDataRootFromHandleRoot(handleRoot) {
+        if (typeof handleRoot !== 'string' || handleRoot.trim() === '') {
+            return null;
+        }
+        const trimmed = handleRoot.replace(/[\\/]+$/, '');
+        const lastSeparator = Math.max(trimmed.lastIndexOf('/'), trimmed.lastIndexOf('\\'));
+        if (lastSeparator <= 0) {
+            return null;
+        }
+        return trimmed.slice(0, lastSeparator);
+    }
+
+    /**
      * Resolves preset directories and the data root.
+     *
+     * Order matters for mobile compatibility: `get_user_directory` is registered
+     * on **all** platforms (desktop + Android + iOS) and returns absolute preset
+     * directory paths, while `get_runtime_paths` is desktop-only in TauriTavern
+     * 2.3.0. The bridge therefore asks for the user directory DTO first and only
+     * falls back to `get_runtime_paths` when the directories could not be resolved
+     * (so Android/iOS never invoke the unregistered command on the happy path).
      *
      * @returns {Promise<HostFsStatus>} Bridge status.
      */
@@ -214,33 +241,7 @@ export function createHostFs({ invoke = null, pathApi = null, getCurrentUserHand
 
         state.handle = await resolveUserHandle();
 
-        // 1. Data root metadata (diagnostics + fallback directory resolution).
-        try {
-            const runtimePaths = await call('get_runtime_paths', {});
-            if (runtimePaths && typeof runtimePaths.data_root === 'string' && runtimePaths.data_root !== '') {
-                state.dataRoot = runtimePaths.data_root;
-                state.dataRootSource = 'runtime_paths';
-            }
-        } catch (error) {
-            if (!isMissingPathError(error)) {
-                log?.warn?.(`[preset-sorter] get_runtime_paths failed: ${errorMessage('get_runtime_paths', error)}`);
-            }
-        }
-
-        // 2. Plain `$APPDATA/data` fallback when the app command is unavailable.
-        if (!state.dataRoot && pathApi && typeof pathApi.appDataDir === 'function') {
-            try {
-                const appDataDir = await pathApi.appDataDir();
-                if (typeof appDataDir === 'string' && appDataDir !== '') {
-                    state.dataRoot = joinPath(appDataDir, 'data');
-                    state.dataRootSource = 'app_data_dir';
-                }
-            } catch (error) {
-                log?.warn?.(`[preset-sorter] appDataDir fallback failed: ${errorMessage('appDataDir', error)}`);
-            }
-        }
-
-        // 3. Preferred: ask the host for the user directory DTO.
+        // 1. Preferred on EVERY platform: user directory DTO with absolute paths.
         let directorySource = null;
         try {
             const dto = await call('get_user_directory', { handle: state.handle });
@@ -253,10 +254,53 @@ export function createHostFs({ invoke = null, pathApi = null, getCurrentUserHand
                 }
                 if (state.directories.size > 0) {
                     directorySource = 'get_user_directory';
+                    // Derive the data root for diagnostics: `root` is
+                    // `<data_root>/<handle>`, so its parent is the data root.
+                    const derivedFromRoot = deriveDataRootFromHandleRoot(dto.root);
+                    if (derivedFromRoot) {
+                        state.dataRoot = derivedFromRoot;
+                        state.dataRootSource = 'user_directory_root';
+                    } else if (typeof dto.openai_settings === 'string') {
+                        const handleRoot = deriveDataRootFromHandleRoot(dto.openai_settings);
+                        const derivedFromPresetDir = handleRoot ? deriveDataRootFromHandleRoot(handleRoot) : null;
+                        if (derivedFromPresetDir) {
+                            state.dataRoot = derivedFromPresetDir;
+                            state.dataRootSource = 'user_directory_root';
+                        }
+                    }
                 }
             }
         } catch (error) {
             log?.warn?.(`[preset-sorter] get_user_directory failed: ${errorMessage('get_user_directory', error)}`);
+        }
+
+        // 2. Desktop-only diagnostics / fallback. Skipped when the user directory
+        //    DTO already resolved everything, so mobile never calls the
+        //    unregistered command. Failure here must never disable the bridge.
+        if (state.directories.size === 0 && !state.dataRoot) {
+            try {
+                const runtimePaths = await call('get_runtime_paths', {});
+                if (runtimePaths && typeof runtimePaths.data_root === 'string' && runtimePaths.data_root !== '') {
+                    state.dataRoot = runtimePaths.data_root;
+                    state.dataRootSource = 'runtime_paths';
+                }
+            } catch (error) {
+                // Expected on Android/iOS (command not registered there).
+                log?.debug?.(`[preset-sorter] get_runtime_paths unavailable: ${errorMessage('get_runtime_paths', error)}`);
+            }
+        }
+
+        // 3. Plain `$APPDATA/data` fallback when the app commands are unavailable.
+        if (!state.dataRoot && pathApi && typeof pathApi.appDataDir === 'function') {
+            try {
+                const appDataDir = await pathApi.appDataDir();
+                if (typeof appDataDir === 'string' && appDataDir !== '') {
+                    state.dataRoot = joinPath(appDataDir, 'data');
+                    state.dataRootSource = 'app_data_dir';
+                }
+            } catch (error) {
+                log?.warn?.(`[preset-sorter] appDataDir fallback failed: ${errorMessage('appDataDir', error)}`);
+            }
         }
 
         // 4. Fallback: join data root + handle + known directory names.
@@ -267,9 +311,13 @@ export function createHostFs({ invoke = null, pathApi = null, getCurrentUserHand
                     joinPath(state.dataRoot, state.handle, PRESET_APIS[apiId].dirName),
                 );
             }
-            directorySource = state.dataRootSource === 'runtime_paths'
-                ? 'runtime_paths_fallback'
-                : 'app_data_dir_fallback';
+            if (state.dataRootSource === 'runtime_paths') {
+                directorySource = 'runtime_paths_fallback';
+            } else if (state.dataRootSource === 'user_directory_root') {
+                directorySource = 'user_directory_root_fallback';
+            } else {
+                directorySource = 'app_data_dir_fallback';
+            }
         }
 
         if (state.directories.size === 0) {
