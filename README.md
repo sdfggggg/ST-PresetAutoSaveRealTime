@@ -64,7 +64,19 @@ QA 离线回归（详见 `_research/LIVE-TEST-REPORT.md` 的 v1.1.0 章节）；
 
 ## 3. 安装
 
-### 3.1 TauriTavern（推荐）
+### 3.1 从 GitHub 安装（TauriTavern，推荐）
+
+插件发布在 GitHub 仓库的独立分支上（仓库 `main` 分支是原项目，互不影响）：
+
+1. 打开 TauriTavern →「扩展」/ Extensions →「Install extension」。
+2. Git URL 填写：`https://github.com/sdfggggg/ST-PresetAutoSaveRealTime`
+3. **Branch or tag name (optional)** 填写：`preset-sorter`（跟随最新版）或固定版本标签 `preset-sorter-v1.1.0`。
+4. 选择「Install just for me」（当前用户）或「Install for all users」（全局），确认第三方扩展警告。
+5. 安装完成后重启 TauriTavern（扩展在启动时加载；若显示禁用，勾选启用后重启）。
+
+> TauriTavern 的安装对话框支持可选分支/标签名；原版 SillyTavern 的扩展安装不支持分支参数，请使用下方本地安装方式。
+
+### 3.2 本地文件夹安装（离线/原版 SillyTavern 通用）
 
 1. 找到数据目录（`data_root`）：
    - **Windows**：`%APPDATA%\com.tauritavern.client\data`
@@ -89,7 +101,7 @@ QA 离线回归（详见 `_research/LIVE-TEST-REPORT.md` 的 v1.1.0 章节）；
 └── src/ ...
 ```
 
-### 3.2 原版 SillyTavern
+### 3.3 原版 SillyTavern
 
 复制到 SillyTavern 安装目录的 `public/scripts/extensions/third-party/preset-sorter/`，
 或在「扩展」面板使用「Install extension」从本地目录安装，然后刷新页面。
