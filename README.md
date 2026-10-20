@@ -72,7 +72,7 @@
 
 1. 打开 TauriTavern →「扩展」/ Extensions →「Install extension」。
 2. Git URL 填写：`https://github.com/sdfggggg/ST-PresetAutoSaveRealTime`
-3. **Branch or tag name (optional)** 填写：`preset-sorter`（跟随最新版）或固定版本标签 `preset-sorter-v1.1.0`。
+3. **Branch or tag name (optional)** 填写：`preset-sorter`（跟随最新版）或固定版本标签 `preset-sorter-v1.2.0`。
 4. 选择「Install just for me」（当前用户）或「Install for all users」（全局），确认第三方扩展警告。
 5. 安装完成后重启 TauriTavern（扩展在启动时加载；若显示禁用，勾选启用后重启）。
 
