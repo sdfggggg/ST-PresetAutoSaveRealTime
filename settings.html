@@ -1,5 +1,5 @@
 <!--
-  Settings panel skeleton for the `preset-sorter` extension (v1.2.0).
+  Settings panel skeleton for the `preset-sorter` extension (v1.3.0).
 
   All user-visible text is injected by `src/settings-ui.js` from the extension's
   built-in i18n dictionary, so this template is language-neutral. Only the
@@ -21,6 +21,9 @@
   #preset_sorter_grouping_enabled_label grouping label
   #preset_sorter_grouping_mode         grouping auto-detect mode <select>
   #preset_sorter_grouping_mode_label   grouping mode label
+  #preset_sorter_grouping_view         dropdown view <select> (collapsible | native)
+  #preset_sorter_grouping_view_label   dropdown view label
+  #preset_sorter_grouping_view_hint    dropdown view hint
   #preset_sorter_grouping_hint         grouping hint line
   #preset_sorter_manage_groups         "manage groups" button
   #preset_sorter_grouping_counts       grouping counts line
@@ -74,6 +77,11 @@
                     <label id="preset_sorter_grouping_mode_label" for="preset_sorter_grouping_mode">Auto-detect mode</label>
                     <select id="preset_sorter_grouping_mode" class="text_pole preset-sorter-grouping-mode-select"></select>
                 </div>
+                <div class="preset-sorter-row">
+                    <label id="preset_sorter_grouping_view_label" for="preset_sorter_grouping_view">Dropdown view</label>
+                    <select id="preset_sorter_grouping_view" class="text_pole preset-sorter-grouping-view-select"></select>
+                </div>
+                <small id="preset_sorter_grouping_view_hint" class="preset-sorter-hint"></small>
                 <small id="preset_sorter_grouping_hint" class="preset-sorter-hint"></small>
                 <div class="preset-sorter-row preset-sorter-grouping-actions">
                     <button id="preset_sorter_manage_groups" class="menu_button" type="button">Manage groups…</button>

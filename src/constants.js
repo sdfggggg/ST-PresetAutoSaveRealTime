@@ -183,10 +183,10 @@ export const STORAGE_VERSION = 1;
 export const SETTINGS_VERSION = 2;
 
 /** Extension version, mirrored in `manifest.json`. @type {string} */
-export const EXTENSION_VERSION = '1.2.0';
+export const EXTENSION_VERSION = '1.3.0';
 
 /**
- * Preset grouping modes (v1.2.0 native `<optgroup>` series grouping).
+ * Preset grouping modes (v1.2.0 series grouping).
  * - `smart`: version-suffix parsing **plus** a conservative "prefix before the
  *   first digit" heuristic (auto groups need at least 2 members).
  * - `strict`: version-suffix parsing only.
@@ -205,6 +205,28 @@ export const GROUPING_MODE_ORDER = Object.freeze([
 
 /** Default grouping mode. @type {string} */
 export const DEFAULT_GROUPING_MODE = GROUPING_MODES.SMART;
+
+/**
+ * How grouped presets are presented (v1.3.0).
+ * - `collapsible`: custom grouped dropdown overlay with collapsible series
+ *   headers (the native `<select>` stays hidden but functional as the source of
+ *   truth for SillyTavern/other extensions).
+ * - `native`: native `<optgroup>` grouping only.
+ * @type {Readonly<{COLLAPSIBLE: 'collapsible', NATIVE: 'native'}>}
+ */
+export const GROUPING_VIEWS = Object.freeze({
+    COLLAPSIBLE: 'collapsible',
+    NATIVE: 'native',
+});
+
+/** UI display order of the grouping views. @type {ReadonlyArray<string>} */
+export const GROUPING_VIEW_ORDER = Object.freeze([
+    GROUPING_VIEWS.COLLAPSIBLE,
+    GROUPING_VIEWS.NATIVE,
+]);
+
+/** Default grouping view (collapsible custom dropdown). @type {string} */
+export const DEFAULT_GROUPING_VIEW = GROUPING_VIEWS.COLLAPSIBLE;
 
 /** Override sentinel that keeps a preset out of every group (flat option). @type {string} */
 export const GROUPING_UNGROUPED = '__ungrouped__';

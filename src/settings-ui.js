@@ -22,11 +22,14 @@ import {
     DEFAULT_DIRECTION,
     DEFAULT_FIELD,
     DEFAULT_GROUPING_MODE,
+    DEFAULT_GROUPING_VIEW,
     DIRECTION_ORDER,
     FIELD_ORDER,
     GROUPING_MODE_ORDER,
     GROUPING_MODES,
     GROUPING_UNGROUPED,
+    GROUPING_VIEW_ORDER,
+    GROUPING_VIEWS,
 } from './constants.js';
 import { formatFieldLabel, formatSortSpec, t } from './i18n.js';
 
@@ -76,7 +79,7 @@ import { formatFieldLabel, formatSortSpec, t } from './i18n.js';
 /**
  * @typedef {object} SettingsUiOptions
  * @property {object} settings Live settings object (mutated by the UI).
- * @property {(patch: {field?: string, direction?: string, enabled?: boolean, applyToAll?: boolean, groupingEnabled?: boolean, groupingMode?: string}) => void} [onChange] Called after a control change.
+ * @property {(patch: {field?: string, direction?: string, enabled?: boolean, applyToAll?: boolean, groupingEnabled?: boolean, groupingMode?: string, groupingView?: string}) => void} [onChange] Called after a control change.
  * @property {() => Promise<void>|void} [onRefresh] Refresh import times handler.
  * @property {() => Promise<void>|void} [onResetUsage] Reset usage handler.
  * @property {() => Promise<boolean>|boolean} [confirmReset] Confirmation for usage reset.
@@ -136,7 +139,7 @@ function readDefaultSortSpec(settings) {
 
 /**
  * @param {object} settings Settings object.
- * @returns {{enabled: boolean, mode: string, overrides: Record<string, Record<string, string>>}} Normalised grouping settings.
+ * @returns {{enabled: boolean, mode: string, view: string, overrides: Record<string, Record<string, string>>}} Normalised grouping settings.
  */
 function readGroupingSettings(settings) {
     const source = settings && typeof settings.grouping === 'object' && settings.grouping !== null
@@ -145,6 +148,7 @@ function readGroupingSettings(settings) {
     return {
         enabled: source.enabled !== false,
         mode: normalizeGroupingMode(source.mode),
+        view: GROUPING_VIEW_ORDER.includes(source.view) ? source.view : DEFAULT_GROUPING_VIEW,
         overrides: source.overrides && typeof source.overrides === 'object' && !Array.isArray(source.overrides)
             ? source.overrides
             : {},
@@ -186,6 +190,9 @@ export function mountSettingsPanel(options) {
         groupingEnabledLabel: byId('preset_sorter_grouping_enabled_label'),
         groupingMode: byId('preset_sorter_grouping_mode'),
         groupingModeLabel: byId('preset_sorter_grouping_mode_label'),
+        groupingView: byId('preset_sorter_grouping_view'),
+        groupingViewLabel: byId('preset_sorter_grouping_view_label'),
+        groupingViewHint: byId('preset_sorter_grouping_view_hint'),
         groupingHint: byId('preset_sorter_grouping_hint'),
         groupingCounts: byId('preset_sorter_grouping_counts'),
         manageGroups: byId('preset_sorter_manage_groups'),
@@ -258,6 +265,9 @@ export function mountSettingsPanel(options) {
     setTitle(elements.groupingEnabled, 'grouping.enabledHint');
     setText(elements.groupingModeLabel, 'grouping.mode');
     setTitle(elements.groupingMode, 'grouping.modeHint');
+    setText(elements.groupingViewLabel, 'grouping.view');
+    setTitle(elements.groupingView, 'grouping.viewHint');
+    setText(elements.groupingViewHint, 'grouping.viewHint');
     setText(elements.groupingHint, 'grouping.modeHint');
     setText(elements.manageGroups, 'grouping.manage');
     setText(elements.managerTitle, 'grouping.managerTitle');
@@ -299,6 +309,21 @@ export function mountSettingsPanel(options) {
                 option.value = mode;
                 option.textContent = t(modeLabels[mode] ?? 'grouping.modeSmart');
                 elements.groupingMode.appendChild(option);
+            }
+        }
+    }
+    if (elements.groupingView) {
+        const existingOptions = elements.groupingView.options;
+        if (!existingOptions || existingOptions.length === 0) {
+            const viewLabels = {
+                [GROUPING_VIEWS.COLLAPSIBLE]: 'grouping.viewCollapsible',
+                [GROUPING_VIEWS.NATIVE]: 'grouping.viewNative',
+            };
+            for (const view of GROUPING_VIEW_ORDER) {
+                const option = documentRef.createElement('option');
+                option.value = view;
+                option.textContent = t(viewLabels[view] ?? 'grouping.viewCollapsible');
+                elements.groupingView.appendChild(option);
             }
         }
     }
@@ -380,6 +405,9 @@ export function mountSettingsPanel(options) {
         }
         if (elements.groupingMode && String(elements.groupingMode.value) !== grouping.mode) {
             elements.groupingMode.value = grouping.mode;
+        }
+        if (elements.groupingView && String(elements.groupingView.value) !== grouping.view) {
+            elements.groupingView.value = grouping.view;
         }
     }
 
@@ -715,6 +743,7 @@ export function mountSettingsPanel(options) {
         settings.grouping = {
             enabled: !!elements.groupingEnabled?.checked,
             mode: grouping.mode,
+            view: grouping.view,
             overrides: grouping.overrides,
         };
         options.onChange?.({ groupingEnabled: settings.grouping.enabled });
@@ -724,9 +753,22 @@ export function mountSettingsPanel(options) {
         settings.grouping = {
             enabled: grouping.enabled,
             mode: normalizeGroupingMode(String(elements.groupingMode?.value ?? '')),
+            view: grouping.view,
             overrides: grouping.overrides,
         };
         options.onChange?.({ groupingMode: settings.grouping.mode });
+    };
+    const onGroupingViewChange = () => {
+        const grouping = readGroupingSettings(settings);
+        settings.grouping = {
+            enabled: grouping.enabled,
+            mode: grouping.mode,
+            view: GROUPING_VIEW_ORDER.includes(String(elements.groupingView?.value ?? ''))
+                ? String(elements.groupingView.value)
+                : DEFAULT_GROUPING_VIEW,
+            overrides: grouping.overrides,
+        };
+        options.onChange?.({ groupingView: settings.grouping.view });
     };
     const onManageGroupsClick = () => {
         if (elements.manager) {
@@ -798,6 +840,7 @@ export function mountSettingsPanel(options) {
     elements.applyAll?.addEventListener?.('change', onApplyAllChange);
     elements.groupingEnabled?.addEventListener?.('change', onGroupingEnabledChange);
     elements.groupingMode?.addEventListener?.('change', onGroupingModeChange);
+    elements.groupingView?.addEventListener?.('change', onGroupingViewChange);
     elements.manageGroups?.addEventListener?.('click', onManageGroupsClick);
     elements.groupSearch?.addEventListener?.('input', onGroupSearchInput);
     elements.groupSave?.addEventListener?.('click', onGroupSaveClick);
@@ -857,6 +900,7 @@ export function mountSettingsPanel(options) {
             elements.applyAll?.removeEventListener?.('change', onApplyAllChange);
             elements.groupingEnabled?.removeEventListener?.('change', onGroupingEnabledChange);
             elements.groupingMode?.removeEventListener?.('change', onGroupingModeChange);
+            elements.groupingView?.removeEventListener?.('change', onGroupingViewChange);
             elements.manageGroups?.removeEventListener?.('click', onManageGroupsClick);
             elements.groupSearch?.removeEventListener?.('input', onGroupSearchInput);
             elements.groupSave?.removeEventListener?.('click', onGroupSaveClick);

@@ -70,6 +70,13 @@ const ZH = {
     'grouping.resetDone': '已恢复自动分组',
     'grouping.noMatches': '没有匹配的预设',
     'grouping.empty': '暂无可分组的预设',
+    'grouping.view': '下拉展示方式',
+    'grouping.viewCollapsible': '折叠式自定义下拉',
+    'grouping.viewNative': '原生分组下拉',
+    'grouping.viewHint': '自定义下拉异常时可切回原生分组',
+    'dropdown.label': '预设下拉',
+    'dropdown.expand': '展开',
+    'dropdown.collapse': '折叠',
     'panel.diagGroups': '分组',
 
     // Settings panel
@@ -187,6 +194,13 @@ const EN = {
     'grouping.resetDone': 'Auto grouping restored',
     'grouping.noMatches': 'No matching presets',
     'grouping.empty': 'No presets available for grouping',
+    'grouping.view': 'Dropdown view',
+    'grouping.viewCollapsible': 'Collapsible custom dropdown',
+    'grouping.viewNative': 'Native grouped dropdown',
+    'grouping.viewHint': 'Switch back to the native grouped dropdown if the custom one misbehaves',
+    'dropdown.label': 'Preset dropdown',
+    'dropdown.expand': 'Expand',
+    'dropdown.collapse': 'Collapse',
     'panel.diagGroups': 'Groups',
 
     // Settings panel

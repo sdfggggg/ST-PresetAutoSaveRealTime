@@ -23,14 +23,17 @@ import {
     DEFAULT_DIRECTION,
     DEFAULT_FIELD,
     DEFAULT_GROUPING_MODE,
+    DEFAULT_GROUPING_VIEW,
     EXTENSION_NAME,
     EXTENSION_VERSION,
     FIELD_ORDER,
     GROUPING_MODE_ORDER,
     GROUPING_UNGROUPED,
+    GROUPING_VIEWS,
     SORT_DIRECTIONS,
     SORT_FIELDS,
 } from './constants.js';
+import { createGroupedPresetDropdown, NATIVE_SELECT_HIDDEN_CLASS } from './custom-dropdown.js';
 import {
     applyGroupedOptionOrder,
     applyOptionOrder,
@@ -77,6 +80,9 @@ let idleFallbackTimer = null;
  * @property {string[]} originalOrder Upstream (pre-sort) option values, including placeholders.
  * @property {{disconnect: () => void, takeRecords: () => MutationRecord[]}|null} observer Option observer.
  * @property {ReturnType<typeof injectSortControl>} control Injected sort-mode control.
+ * @property {ReturnType<typeof createGroupedPresetDropdown>|null} [dropdown] Custom grouped dropdown (v1.3.0).
+ * @property {{placeholders: Array<object>, entities: Array<object>}|null} [lastGroupedPlan] Cached grouped plan for the dropdown.
+ * @property {boolean} [dropdownFailed] A custom dropdown init failed; keep using native fallback.
  */
 
 /**
@@ -318,8 +324,9 @@ function resolveTauriPathApi() {
 
 /**
  * @typedef {object} GroupingSettings
- * @property {boolean} enabled Whether native `<optgroup>` grouping is enabled.
+ * @property {boolean} enabled Whether series grouping is enabled.
  * @property {string} mode Auto-detection mode (`smart` | `strict`).
+ * @property {string} view Dropdown view (`collapsible` | `native`, v1.3.0).
  * @property {Record<string, Record<string, string>>} overrides Manual group overrides per API (`apiId -> {presetName -> groupName | __ungrouped__}`).
  */
 
@@ -372,8 +379,21 @@ function normalizeGroupingSettings(raw) {
     return {
         enabled: source.enabled !== false,
         mode: normalizeGroupingMode(source.mode === undefined ? DEFAULT_GROUPING_MODE : source.mode),
+        view: normalizeGroupingView(source.view),
         overrides,
     };
+}
+
+/**
+ * Normalises the additive v1.3.0 dropdown view setting (missing -> collapsible).
+ *
+ * @param {unknown} view Raw view value.
+ * @returns {string} `collapsible` | `native`.
+ */
+function normalizeGroupingView(view) {
+    return view === GROUPING_VIEWS.NATIVE || view === GROUPING_VIEWS.COLLAPSIBLE
+        ? view
+        : DEFAULT_GROUPING_VIEW;
 }
 
 /**
@@ -618,9 +638,15 @@ function attachManager(apiId, select) {
         const spec = storedSpecFor(canonicalApiId);
         existing.control?.setState(spec.field, spec.direction);
         existing.control?.setHidden(!rt.settings.enabled);
+        try {
+            applyState(existing);
+        } catch (error) {
+            console.error(`${LOG_PREFIX} failed to refresh ${canonicalApiId} presets.`, error);
+        }
         return;
     }
     existing?.observer?.disconnect();
+    disposeGroupedDropdown(existing);
 
     /** @type {PresetManagerState} */
     const state = {
@@ -630,6 +656,9 @@ function attachManager(apiId, select) {
         originalOrder: readSelectOptions(select).map(option => option.value),
         observer: null,
         control: null,
+        dropdown: null,
+        lastGroupedPlan: null,
+        dropdownFailed: false,
     };
     state.observer = observePresetSelect(select, records => onSelectMutated(state, records));
     const spec = storedSpecFor(canonicalApiId);
@@ -803,14 +832,161 @@ function groupedPlanForState(state) {
 }
 
 /**
- * Applies the desired order/grouping to one manager (no-op when already correct).
+ * Builds the model consumed by the custom grouped dropdown for one manager.
+ *
+ * @param {PresetManagerState} state Manager state.
+ * @returns {{placeholders: Array<object>, entities: Array<object>}} Grouped plan.
+ */
+function dropdownModelForState(state) {
+    if (state.lastGroupedPlan) {
+        return state.lastGroupedPlan;
+    }
+    return groupedPlanForState(state);
+}
+
+/**
+ * Flattens a grouped plan into native `<option>` order (used while the custom
+ * dropdown is active, so the hidden native select stays a flat, sorted list).
+ *
+ * @param {{placeholders: Array<{name: string, value: string}>, entities: Array<object>}} plan Grouped plan.
+ * @returns {Array<{name: string, value: string}>} Flat items (placeholders first).
+ */
+function flattenGroupedPlan(plan) {
+    /** @type {Array<{name: string, value: string}>} */
+    const items = [];
+    for (const placeholder of plan?.placeholders ?? []) {
+        items.push({ name: placeholder.name, value: placeholder.value });
+    }
+    for (const entity of plan?.entities ?? []) {
+        if (!entity || typeof entity !== 'object') {
+            continue;
+        }
+        if (entity.type === 'group') {
+            for (const member of entity.members ?? []) {
+                items.push({ name: member.name, value: member.value });
+            }
+        } else if (entity.type === 'option') {
+            const name = entity.name ?? (entity.item ? entity.item.name : '');
+            const value = entity.value ?? (entity.item ? entity.item.value : '');
+            items.push({ name, value });
+        }
+    }
+    return items;
+}
+
+/**
+ * Ensures the custom grouped dropdown exists for a manager (fail-soft).
+ *
+ * @param {PresetManagerState} state Manager state.
+ * @returns {ReturnType<typeof createGroupedPresetDropdown>|null} Dropdown handle or `null`.
+ */
+function ensureGroupedDropdown(state) {
+    if (state.dropdown) {
+        return state.dropdown;
+    }
+    if (state.dropdownFailed) {
+        return null;
+    }
+    const created = createGroupedPresetDropdown({
+        select: state.select,
+        apiId: state.apiId,
+        getModel: () => dropdownModelForState(state),
+        t,
+    });
+    if (!created) {
+        state.dropdownFailed = true;
+        try {
+            state.select?.classList?.remove?.(NATIVE_SELECT_HIDDEN_CLASS);
+        } catch {
+            // Unhiding the native select is best-effort.
+        }
+        return null;
+    }
+    state.dropdown = created;
+    return created;
+}
+
+/**
+ * Tears down a manager's custom dropdown (restores the native select).
+ *
+ * @param {PresetManagerState|undefined|null} state Manager state.
+ * @returns {void}
+ */
+function disposeGroupedDropdown(state) {
+    if (!state) {
+        return;
+    }
+    if (state.dropdown) {
+        try {
+            state.dropdown.destroy?.();
+        } catch (error) {
+            console.error(`${LOG_PREFIX} failed to destroy the custom dropdown.`, error);
+        }
+        state.dropdown = null;
+    }
+    state.lastGroupedPlan = null;
+    try {
+        state.select?.classList?.remove?.(NATIVE_SELECT_HIDDEN_CLASS);
+    } catch {
+        // Ignore.
+    }
+}
+
+/**
+ * Allows a failed custom dropdown to be retried after a grouping settings change.
+ *
+ * @returns {void}
+ */
+function resetDropdownFailures() {
+    const rt = runtime;
+    if (!rt) {
+        return;
+    }
+    for (const state of rt.managers.values()) {
+        state.dropdownFailed = false;
+    }
+}
+
+/**
+ * Applies the desired order/grouping/view to one manager (no-op when already
+ * correct).
  *
  * @param {PresetManagerState} state Manager state.
  * @returns {boolean} Whether the DOM was changed.
  */
 function applyState(state) {
     const rt = runtime;
-    const groupingEnabled = !!rt && rt.settings.grouping.enabled;
+    if (!rt) {
+        return false;
+    }
+    const grouping = rt.settings.grouping;
+    const groupingEnabled = !!grouping.enabled;
+    const view = normalizeGroupingView(grouping.view);
+
+    if (groupingEnabled && view === GROUPING_VIEWS.COLLAPSIBLE) {
+        const plan = groupedPlanForState(state);
+        state.lastGroupedPlan = plan;
+        // The hidden native select stays flat + sorted for ST/other extensions.
+        let changed = applyOptionOrder(state.select, flattenGroupedPlan(plan));
+        state.observer?.takeRecords?.();
+        const dropdown = ensureGroupedDropdown(state);
+        if (dropdown) {
+            try {
+                dropdown.sync({ placeholders: plan.placeholders, entities: plan.entities });
+                return changed;
+            } catch (error) {
+                console.error(`${LOG_PREFIX} custom dropdown sync failed; falling back to native grouping.`, error);
+                disposeGroupedDropdown(state);
+                state.dropdownFailed = true;
+            }
+        }
+        // Fail-soft: native grouped fallback for this manager.
+        changed = applyGroupedOptionOrder(state.select, plan) || changed;
+        state.observer?.takeRecords?.();
+        return changed;
+    }
+
+    disposeGroupedDropdown(state);
     const changed = groupingEnabled
         ? applyGroupedOptionOrder(state.select, groupedPlanForState(state))
         : applyOptionOrder(state.select, desiredItemsForState(state));
@@ -1339,15 +1515,20 @@ function syncControls() {
 
 /**
  * Handles a settings panel change (toggles / default field / direction /
- * grouping switch). The panel has already mutated the live settings object.
+ * grouping switch, mode or dropdown view). The panel has already mutated the
+ * live settings object.
  *
- * @param {{enabled?: boolean, applyToAll?: boolean, field?: string, direction?: string, groupingEnabled?: boolean, groupingMode?: string}} patch Changed fields.
+ * @param {{enabled?: boolean, applyToAll?: boolean, field?: string, direction?: string, groupingEnabled?: boolean, groupingMode?: string, groupingView?: string}} patch Changed fields.
  * @returns {void}
  */
 function onSettingsPanelChange(patch) {
     const rt = runtime;
     if (!rt) {
         return;
+    }
+    if (patch && (patch.groupingEnabled !== undefined || patch.groupingMode !== undefined || patch.groupingView !== undefined)) {
+        // A grouping-settings change is a good point to retry a failed custom view.
+        resetDropdownFailures();
     }
     syncControls();
     applyAllStates();
@@ -1902,6 +2083,20 @@ function buildProbeStatus() {
     } catch {
         // Diagnostics must never break the probe.
     }
+    let dropdownActive = 0;
+    let dropdownOpen = 0;
+    for (const state of rt.managers.values()) {
+        if (state.dropdown) {
+            dropdownActive += 1;
+            try {
+                if (state.dropdown.isOpen?.()) {
+                    dropdownOpen += 1;
+                }
+            } catch {
+                // Diagnostics must never break the probe.
+            }
+        }
+    }
     return {
         version: VERSION,
         initialized: true,
@@ -1914,11 +2109,19 @@ function buildProbeStatus() {
         grouping: {
             enabled: rt.settings.grouping.enabled,
             mode: rt.settings.grouping.mode,
+            view: normalizeGroupingView(rt.settings.grouping.view),
             modes: [...GROUPING_MODE_ORDER],
+            views: Object.values(GROUPING_VIEWS),
             groups: groupingSummary.groups,
             groupedPresets: groupingSummary.grouped,
             presets: groupingSummary.presets,
             overrides: groupingSummary.manual,
+        },
+        // v1.3.0 custom collapsible grouped dropdown.
+        dropdown: {
+            active: dropdownActive,
+            apiCount: rt.managers.size,
+            openCount: dropdownOpen,
         },
         // Backward-compatible v1 fields kept for older probes / tooling.
         mode: defaultMode,
